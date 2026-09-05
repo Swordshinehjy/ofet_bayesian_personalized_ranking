@@ -1,0 +1,66 @@
+17:19:50 [INFO] Preprocessed dataset: 1305 valid pairs
+17:19:53 [INFO] Train/Val/Test: 1043/131/131
+17:19:53 [INFO] Model parameters: 340,902
+17:19:55 [INFO] Ep    1 | tr=9.4612  va=8.3522 | mu_e acc=0.442 rho=0.286 p=0.612 | mu_h acc=0.680 rho=0.534 p=0.639
+17:20:04 [INFO] Ep   10 | tr=6.2681  va=5.6807 | mu_e acc=0.570 rho=0.614 p=0.653 | mu_h acc=0.680 rho=0.708 p=0.642
+17:20:15 [INFO] Ep   20 | tr=4.2622  va=4.8630 | mu_e acc=0.651 rho=0.657 p=0.677 | mu_h acc=0.680 rho=0.696 p=0.626
+17:20:25 [INFO] Ep   30 | tr=2.8581  va=3.3913 | mu_e acc=0.674 rho=0.599 p=0.653 | mu_h acc=0.728 rho=0.709 p=0.638
+17:20:36 [INFO] Ep   40 | tr=1.9671  va=2.6544 | mu_e acc=0.791 rho=0.662 p=0.671 | mu_h acc=0.699 rho=0.750 p=0.636
+17:20:47 [INFO] Ep   50 | tr=1.5400  va=2.4060 | mu_e acc=0.674 rho=0.644 p=0.644 | mu_h acc=0.767 rho=0.763 p=0.634
+17:20:58 [INFO] Ep   60 | tr=1.2628  va=2.2865 | mu_e acc=0.767 rho=0.593 p=0.659 | mu_h acc=0.767 rho=0.786 p=0.649
+17:21:09 [INFO] Ep   70 | tr=1.0752  va=2.0390 | mu_e acc=0.756 rho=0.648 p=0.651 | mu_h acc=0.767 rho=0.781 p=0.649
+17:21:20 [INFO] Ep   80 | tr=1.0254  va=1.7059 | mu_e acc=0.814 rho=0.646 p=0.628 | mu_h acc=0.835 rho=0.765 p=0.641
+17:21:31 [INFO] Ep   90 | tr=0.9140  va=1.7550 | mu_e acc=0.756 rho=0.635 p=0.640 | mu_h acc=0.835 rho=0.774 p=0.650
+17:21:42 [INFO] Ep  100 | tr=0.8692  va=1.5620 | mu_e acc=0.779 rho=0.643 p=0.627 | mu_h acc=0.845 rho=0.784 p=0.660
+17:21:52 [INFO] Ep  110 | tr=0.8107  va=1.6302 | mu_e acc=0.802 rho=0.617 p=0.640 | mu_h acc=0.835 rho=0.805 p=0.652
+17:22:03 [INFO] Ep  120 | tr=0.7696  va=1.5907 | mu_e acc=0.826 rho=0.663 p=0.620 | mu_h acc=0.845 rho=0.802 p=0.647
+17:22:14 [INFO] Ep  130 | tr=0.7317  va=1.4467 | mu_e acc=0.814 rho=0.650 p=0.616 | mu_h acc=0.874 rho=0.791 p=0.658
+17:22:24 [INFO] Ep  140 | tr=0.7138  va=1.6403 | mu_e acc=0.744 rho=0.631 p=0.620 | mu_h acc=0.874 rho=0.794 p=0.658
+17:22:35 [INFO] Ep  150 | tr=0.6844  va=1.5408 | mu_e acc=0.860 rho=0.634 p=0.629 | mu_h acc=0.883 rho=0.798 p=0.666
+17:22:45 [INFO] Ep  160 | tr=0.6705  va=1.5097 | mu_e acc=0.837 rho=0.621 p=0.632 | mu_h acc=0.883 rho=0.790 p=0.658
+17:22:57 [INFO] Ep  170 | tr=0.6318  va=1.4960 | mu_e acc=0.826 rho=0.613 p=0.623 | mu_h acc=0.932 rho=0.798 p=0.662
+17:23:08 [INFO] Ep  180 | tr=0.6374  va=1.4882 | mu_e acc=0.860 rho=0.645 p=0.623 | mu_h acc=0.854 rho=0.766 p=0.660
+17:23:19 [INFO] Ep  190 | tr=0.6308  va=1.4430 | mu_e acc=0.849 rho=0.626 p=0.628 | mu_h acc=0.864 rho=0.787 p=0.650
+17:23:31 [INFO] Ep  200 | tr=0.6264  va=1.3824 | mu_e acc=0.849 rho=0.642 p=0.617 | mu_h acc=0.883 rho=0.777 p=0.656
+17:23:42 [INFO] Ep  210 | tr=0.5951  va=1.3017 | mu_e acc=0.860 rho=0.649 p=0.619 | mu_h acc=0.883 rho=0.784 p=0.663
+17:23:53 [INFO] Ep  220 | tr=0.6185  va=1.2702 | mu_e acc=0.895 rho=0.631 p=0.626 | mu_h acc=0.864 rho=0.776 p=0.659
+17:23:58 [INFO] Early stopping at epoch 224
+17:23:58 [INFO] 
+========== Test Results ==========
+17:23:58 [INFO]   mu_e_pair_acc            : 0.8519
+17:23:58 [INFO]   mu_e_spearman            : 0.6493
+17:23:58 [INFO]   mu_e_avg_prob            : 0.6260
+17:23:58 [INFO]   mu_h_pair_acc            : 0.8526
+17:23:58 [INFO]   mu_h_spearman            : 0.6666
+17:23:58 [INFO]   mu_h_avg_prob            : 0.6576
+17:23:58 [INFO] Checkpoint saved → checkpoints\best_model.pt
+17:23:58 [INFO] 
+===== Final Test Metrics =====
+17:23:58 [INFO]   mu_e_pair_acc                 : 0.8519
+17:23:58 [INFO]   mu_e_spearman                 : 0.6493
+17:23:58 [INFO]   mu_e_avg_prob                 : 0.6260
+17:23:58 [INFO]   mu_h_pair_acc                 : 0.8526
+17:23:58 [INFO]   mu_h_spearman                 : 0.6666
+17:23:58 [INFO]   mu_h_avg_prob                 : 0.6576
+17:24:11 [INFO] Preprocessed dataset: 1305 valid pairs
+17:24:11 [INFO] Full dataset size: 1305 pairs
+17:24:15 [INFO] Model parameters: 340,902
+17:24:15 [INFO] Starting fine-tuning for 10 epochs with lr=1e-05
+17:24:17 [INFO] Ep    1 | loss=0.8680 | mu_e acc=0.926 rho=0.658 p=0.642 | mu_h acc=0.920 rho=0.704 p=0.683
+17:24:18 [INFO] Ep    2 | loss=0.8261 | mu_e acc=0.937 rho=0.655 p=0.640 | mu_h acc=0.914 rho=0.704 p=0.677
+17:24:19 [INFO] Ep    3 | loss=0.8519 | mu_e acc=0.942 rho=0.660 p=0.643 | mu_h acc=0.922 rho=0.707 p=0.684
+17:24:20 [INFO] Ep    4 | loss=0.8328 | mu_e acc=0.937 rho=0.653 p=0.643 | mu_h acc=0.912 rho=0.702 p=0.680
+17:24:22 [INFO] Ep    5 | loss=0.8102 | mu_e acc=0.938 rho=0.661 p=0.645 | mu_h acc=0.924 rho=0.706 p=0.681
+17:24:23 [INFO] Ep    6 | loss=0.7984 | mu_e acc=0.938 rho=0.660 p=0.642 | mu_h acc=0.937 rho=0.706 p=0.680
+17:24:24 [INFO] Ep    7 | loss=0.8172 | mu_e acc=0.943 rho=0.662 p=0.640 | mu_h acc=0.932 rho=0.702 p=0.680
+17:24:26 [INFO] Ep    8 | loss=0.8264 | mu_e acc=0.936 rho=0.658 p=0.643 | mu_h acc=0.927 rho=0.706 p=0.684
+17:24:27 [INFO] Ep    9 | loss=0.8079 | mu_e acc=0.944 rho=0.659 p=0.643 | mu_h acc=0.927 rho=0.706 p=0.678
+17:24:28 [INFO] Ep   10 | loss=0.8117 | mu_e acc=0.940 rho=0.657 p=0.644 | mu_h acc=0.925 rho=0.707 p=0.678
+17:24:28 [INFO] Final model saved → checkpoints\final_model.pt
+17:24:28 [INFO] 
+===== Final model saved to checkpoints\final_model.pt =====
+17:24:38 [INFO] Valid pairs: 2/2
+17:24:38 [INFO] Predictions saved → predictions.csv
+17:24:38 [INFO]   Materials_1 Materials_2 preferred_mu_e  prob_mu_e preferred_mu_h  prob_mu_h
+0     PTIIG-T  PTIIG-SeSe     PTIIG-SeSe   0.592316     PTIIG-SeSe   0.520350
+1     PTIIG-T  PAIID-SeSe        PTIIG-T   0.674470     PAIID-SeSe   0.614923

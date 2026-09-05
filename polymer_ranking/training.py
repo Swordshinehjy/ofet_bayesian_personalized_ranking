@@ -95,7 +95,7 @@ def _run_epoch(
 
 
 def compute_metrics(s1, s2, y1, y2) -> Dict[str, float]:
-    """Compute Pairwise Accuracy, Spearman ρ, and average ranking probability."""
+    """Compute Pairwise Accuracy, Spearman rho, and average ranking probability."""
     out = {}
     for t, name in enumerate(TASK_NAMES):
         dp = s1[:, t] - s2[:, t]
@@ -199,8 +199,8 @@ def train(
             logger.info(
                 f"Ep {epoch:4d} | "
                 f"tr={tr_loss:.4f}  va={va_loss:.4f} | "
-                f"mu_e acc={va_met['mu_e_pair_acc']:.3f} ρ={va_met['mu_e_spearman']:.3f} p={va_met['mu_e_avg_prob']:.3f} | "
-                f"mu_h acc={va_met['mu_h_pair_acc']:.3f} ρ={va_met['mu_h_spearman']:.3f} p={va_met['mu_h_avg_prob']:.3f}"
+                f"mu_e acc={va_met['mu_e_pair_acc']:.3f} rho={va_met['mu_e_spearman']:.3f} p={va_met['mu_e_avg_prob']:.3f} | "
+                f"mu_h acc={va_met['mu_h_pair_acc']:.3f} rho={va_met['mu_h_spearman']:.3f} p={va_met['mu_h_avg_prob']:.3f}"
             )
 
         if stopper.step(va_loss, model):
@@ -288,8 +288,8 @@ def finetune(config: FinetuneConfig) -> Dict[str, Any]:
 
         logger.info(
             f"Ep {epoch:4d} | loss={tr_loss:.4f} | "
-            f"mu_e acc={tr_met['mu_e_pair_acc']:.3f} ρ={tr_met['mu_e_spearman']:.3f} p={tr_met['mu_e_avg_prob']:.3f} | "
-            f"mu_h acc={tr_met['mu_h_pair_acc']:.3f} ρ={tr_met['mu_h_spearman']:.3f} p={tr_met['mu_h_avg_prob']:.3f}"
+            f"mu_e acc={tr_met['mu_e_pair_acc']:.3f} rho={tr_met['mu_e_spearman']:.3f} p={tr_met['mu_e_avg_prob']:.3f} | "
+            f"mu_h acc={tr_met['mu_h_pair_acc']:.3f} rho={tr_met['mu_h_spearman']:.3f} p={tr_met['mu_h_avg_prob']:.3f}"
         )
 
     final_ckpt_path = Path(config.save_dir) / "final_model.pt"
