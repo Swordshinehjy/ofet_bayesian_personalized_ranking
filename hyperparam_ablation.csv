@@ -1,0 +1,3 @@
+sweep,rank_weight,reg_weight,censored_weight,val_mean_acc,val_acc_std,val_mu_e_acc,val_mu_h_acc,val_mu_e_rho,val_mu_h_rho,best_epoch,n_params,delta_scale
+loss,0.9,0.1,1.0,0.7138,0.0,0.7792,0.6484,0.0132,0.2263,5,286577,1.09
+censored,0.9,0.1,1.0,0.7334,0.0,0.7792,0.6875,0.3623,0.3463,16,286577,1.09

@@ -1,0 +1,87 @@
+17:54:28 [INFO] Cyclization: 491 short units expanded into oligomers (span target 13, max_repeats=8)
+17:54:28 [INFO] mu_e: 767/1467 pairs have both mobilities measured (regression target known); 120 have exactly one censored side (ranking only); 580 are censored on both sides (no ordering information). censored log floor = -6.48
+17:54:28 [INFO] mu_h: 1023/1467 pairs have both mobilities measured (regression target known); 156 have exactly one censored side (ranking only); 288 are censored on both sides (no ordering information). censored log floor = -7.31
+17:54:28 [INFO] Preprocessed dataset: 1467 valid pairs
+17:54:32 [INFO] Split by 'pair': Train/Val/Test: 1173/147/147
+17:54:32 [INFO] delta_scale (std of measured log10 differences): 1.090
+17:54:32 [INFO] Leakage diagnostics: test_material_overlap=0.798, test_pair_overlap=0.014
+17:54:32 [INFO] Model parameters: 340,902
+17:54:34 [INFO] Ep    1 | tr=1.4942  va=1.4223 | mu_e acc=0.675 rho=-0.043 n=77 | mu_h acc=0.695 rho=0.190 n=128
+17:54:45 [INFO] Ep   10 | tr=1.2091  va=1.2281 | mu_e acc=0.623 rho=0.315 n=77 | mu_h acc=0.664 rho=0.307 n=128
+17:54:58 [INFO] Ep   20 | tr=1.0566  va=1.1654 | mu_e acc=0.714 rho=0.390 n=77 | mu_h acc=0.703 rho=0.315 n=128
+17:55:11 [INFO] Ep   30 | tr=0.8769  va=1.1074 | mu_e acc=0.753 rho=0.273 n=77 | mu_h acc=0.711 rho=0.364 n=128
+17:55:24 [INFO] Ep   40 | tr=0.7734  va=1.0372 | mu_e acc=0.792 rho=0.431 n=77 | mu_h acc=0.781 rho=0.382 n=128
+17:55:36 [INFO] Ep   50 | tr=0.7084  va=1.0263 | mu_e acc=0.766 rho=0.404 n=77 | mu_h acc=0.758 rho=0.389 n=128
+17:55:49 [INFO] Ep   60 | tr=0.6587  va=0.9528 | mu_e acc=0.818 rho=0.485 n=77 | mu_h acc=0.789 rho=0.463 n=128
+17:56:02 [INFO] Ep   70 | tr=0.6039  va=0.9415 | mu_e acc=0.818 rho=0.457 n=77 | mu_h acc=0.797 rho=0.433 n=128
+17:56:15 [INFO] Ep   80 | tr=0.5813  va=0.9390 | mu_e acc=0.844 rho=0.414 n=77 | mu_h acc=0.812 rho=0.450 n=128
+17:56:28 [INFO] Ep   90 | tr=0.5744  va=0.9305 | mu_e acc=0.844 rho=0.431 n=77 | mu_h acc=0.805 rho=0.466 n=128
+17:56:41 [INFO] Ep  100 | tr=0.5623  va=0.9416 | mu_e acc=0.831 rho=0.451 n=77 | mu_h acc=0.812 rho=0.464 n=128
+17:56:54 [INFO] Ep  110 | tr=0.5621  va=0.9438 | mu_e acc=0.805 rho=0.430 n=77 | mu_h acc=0.812 rho=0.461 n=128
+17:57:07 [INFO] Ep  120 | tr=0.5557  va=0.9403 | mu_e acc=0.805 rho=0.436 n=77 | mu_h acc=0.820 rho=0.461 n=128
+17:57:12 [INFO] Early stopping at epoch 124 (best pair_acc=0.8336)
+17:57:12 [INFO] 
+========== Test Results ==========
+17:57:12 [INFO]   mu_e_pair_acc            : 0.8081
+17:57:12 [INFO]   mu_e_spearman            : 0.3708
+17:57:12 [INFO]   mu_e_avg_prob            : 0.6817
+17:57:12 [INFO]   mu_e_n_rank              : 99.0000
+17:57:12 [INFO]   mu_e_n_reg               : 88.0000
+17:57:12 [INFO]   mu_h_pair_acc            : 0.7838
+17:57:12 [INFO]   mu_h_spearman            : 0.4085
+17:57:12 [INFO]   mu_h_avg_prob            : 0.6817
+17:57:12 [INFO]   mu_h_n_rank              : 111.0000
+17:57:12 [INFO]   mu_h_n_reg               : 98.0000
+17:57:12 [INFO]   mean_pair_acc            : 0.7959
+17:57:12 [INFO] Checkpoint saved -> checkpoints\best_model.pt
+17:57:12 [INFO] Checkpoint saved -> checkpoints\final_model.pt
+17:57:12 [INFO] 
+===== Final Test Metrics =====
+17:57:12 [INFO]   mu_e_pair_acc                 : 0.8081
+17:57:12 [INFO]   mu_e_spearman                 : 0.3708
+17:57:12 [INFO]   mu_e_avg_prob                 : 0.6817
+17:57:12 [INFO]   mu_e_n_rank                   : 99.0000
+17:57:12 [INFO]   mu_e_n_reg                    : 88.0000
+17:57:12 [INFO]   mu_h_pair_acc                 : 0.7838
+17:57:12 [INFO]   mu_h_spearman                 : 0.4085
+17:57:12 [INFO]   mu_h_avg_prob                 : 0.6817
+17:57:12 [INFO]   mu_h_n_rank                   : 111.0000
+17:57:12 [INFO]   mu_h_n_reg                    : 98.0000
+17:57:12 [INFO]   mean_pair_acc                 : 0.7959
+17:57:27 [INFO] Cyclization: 491 short units expanded into oligomers (span target 13, max_repeats=8)
+17:57:27 [INFO] mu_e: 767/1467 pairs have both mobilities measured (regression target known); 120 have exactly one censored side (ranking only); 580 are censored on both sides (no ordering information). censored log floor = -6.48
+17:57:27 [INFO] mu_h: 1023/1467 pairs have both mobilities measured (regression target known); 156 have exactly one censored side (ranking only); 288 are censored on both sides (no ordering information). censored log floor = -7.31
+17:57:27 [INFO] Preprocessed dataset: 1467 valid pairs
+17:57:27 [INFO] Full dataset size: 1467 pairs
+17:57:31 [INFO] Model parameters: 340,902
+17:57:31 [INFO] delta_scale: 1.090
+17:57:31 [INFO] Starting fine-tuning for 20 epochs with lr=1e-05
+17:57:33 [INFO] Ep    1 | loss=0.6032 | mu_e acc=0.976 rho=0.363 | mu_h acc=0.959 rho=0.494 | val acc_e=0.788 acc_h=0.784
+17:57:35 [INFO] Ep    2 | loss=0.6057 | mu_e acc=0.965 rho=0.369 | mu_h acc=0.957 rho=0.487 | val acc_e=0.798 acc_h=0.784
+17:57:36 [INFO] Ep    3 | loss=0.6066 | mu_e acc=0.973 rho=0.363 | mu_h acc=0.957 rho=0.491 | val acc_e=0.798 acc_h=0.784
+17:57:37 [INFO] Ep    4 | loss=0.6033 | mu_e acc=0.978 rho=0.360 | mu_h acc=0.955 rho=0.493 | val acc_e=0.788 acc_h=0.793
+17:57:39 [INFO] Ep    5 | loss=0.5951 | mu_e acc=0.976 rho=0.367 | mu_h acc=0.965 rho=0.498 | val acc_e=0.798 acc_h=0.793
+17:57:40 [INFO] Ep    6 | loss=0.5988 | mu_e acc=0.981 rho=0.369 | mu_h acc=0.962 rho=0.494 | val acc_e=0.798 acc_h=0.784
+17:57:41 [INFO] Ep    7 | loss=0.6001 | mu_e acc=0.974 rho=0.372 | mu_h acc=0.955 rho=0.490 | val acc_e=0.788 acc_h=0.793
+17:57:42 [INFO] Ep    8 | loss=0.6039 | mu_e acc=0.981 rho=0.363 | mu_h acc=0.959 rho=0.491 | val acc_e=0.788 acc_h=0.793
+17:57:44 [INFO] Ep    9 | loss=0.5988 | mu_e acc=0.974 rho=0.370 | mu_h acc=0.959 rho=0.487 | val acc_e=0.788 acc_h=0.802
+17:57:45 [INFO] Ep   10 | loss=0.6006 | mu_e acc=0.973 rho=0.364 | mu_h acc=0.964 rho=0.497 | val acc_e=0.788 acc_h=0.802
+17:57:46 [INFO] Ep   11 | loss=0.5953 | mu_e acc=0.976 rho=0.365 | mu_h acc=0.963 rho=0.492 | val acc_e=0.788 acc_h=0.802
+17:57:48 [INFO] Ep   12 | loss=0.6046 | mu_e acc=0.977 rho=0.367 | mu_h acc=0.965 rho=0.489 | val acc_e=0.798 acc_h=0.802
+17:57:49 [INFO] Ep   13 | loss=0.6049 | mu_e acc=0.973 rho=0.370 | mu_h acc=0.966 rho=0.496 | val acc_e=0.798 acc_h=0.802
+17:57:50 [INFO] Ep   14 | loss=0.5984 | mu_e acc=0.968 rho=0.367 | mu_h acc=0.959 rho=0.489 | val acc_e=0.798 acc_h=0.802
+17:57:52 [INFO] Ep   15 | loss=0.5995 | mu_e acc=0.973 rho=0.376 | mu_h acc=0.966 rho=0.488 | val acc_e=0.798 acc_h=0.802
+17:57:53 [INFO] Ep   16 | loss=0.5963 | mu_e acc=0.974 rho=0.368 | mu_h acc=0.965 rho=0.496 | val acc_e=0.798 acc_h=0.802
+17:57:54 [INFO] Ep   17 | loss=0.5976 | mu_e acc=0.973 rho=0.366 | mu_h acc=0.967 rho=0.493 | val acc_e=0.788 acc_h=0.802
+17:57:56 [INFO] Ep   18 | loss=0.5960 | mu_e acc=0.974 rho=0.368 | mu_h acc=0.956 rho=0.495 | val acc_e=0.788 acc_h=0.802
+17:57:57 [INFO] Ep   19 | loss=0.5959 | mu_e acc=0.980 rho=0.378 | mu_h acc=0.968 rho=0.490 | val acc_e=0.788 acc_h=0.802
+17:57:59 [INFO] Ep   20 | loss=0.5974 | mu_e acc=0.977 rho=0.368 | mu_h acc=0.959 rho=0.495 | val acc_e=0.788 acc_h=0.802
+17:57:59 [INFO] Final model saved -> checkpoints\final_model.pt
+17:57:59 [INFO] 
+===== Final model saved to checkpoints\final_model.pt =====
+17:58:08 [INFO] Cyclization: 3 short units expanded into oligomers (span target 13, max_repeats=8)
+17:58:08 [INFO] Valid pairs: 2/2
+17:58:08 [INFO] Predictions saved -> predictions.csv
+17:58:08 [INFO]   Materials_1 Materials_2 preferred_mu_e  prob_mu_e preferred_mu_h  prob_mu_h
+0     PTIIG-T  PTIIG-SeSe        PTIIG-T   0.870517        PTIIG-T   0.755681
+1     PTIIG-T  PAIID-SeSe     PAIID-SeSe   0.557763        PTIIG-T   0.771509
