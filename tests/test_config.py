@@ -131,7 +131,7 @@ class TestFinetuneConfig:
         cfg = FinetuneConfig()
         assert cfg.finetune_epochs == 20
         assert cfg.lr == 1e-5
-        assert cfg.checkpoint_path == "checkpoints/best_model.pt"
+        assert cfg.checkpoint_path == "checkpoints/best_model.safetensors"
         assert cfg.val_ratio == 0.1
         assert cfg.patience == 10
 
@@ -145,7 +145,7 @@ class TestPredictConfig:
     def test_defaults(self):
         cfg = PredictConfig()
         assert cfg.predict_csv == ""
-        assert cfg.checkpoint_path == "checkpoints/best_model.pt"
+        assert cfg.checkpoint_path == "checkpoints/best_model.safetensors"
         assert cfg.output_path == "predictions.csv"
         assert cfg.batch_size == 32
 

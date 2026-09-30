@@ -28,7 +28,7 @@ OLIGOMER_MAX_REPEATS = 8
 # regression target (see ``ok_{task}_{side}``).
 CENSOR_LOG_MARGIN = 1.0
 
-SPLIT_MODES = ("pair", "material")
+SPLIT_MODES = ("pair", "material", "group")
 
 
 def min_span_for_depth(depth: int = DEFAULT_DEPTH) -> int:
@@ -111,6 +111,9 @@ class TrainingConfig:
     #   "material" -> material-disjoint split (no material shared between
     #                 train and val/test); a stricter, extrapolation-flavoured
     #                 estimate that is useful as a leakage diagnostic
+    #   "group"    -> paper-disjoint split by doi (all pairs of one paper stay
+    #                 in a single split); guards against paper-level bias such
+    #                 as shared device fab / measurement setup
     split_by: str = "pair"
 
     def __post_init__(self):
@@ -137,7 +140,7 @@ class TrainingConfig:
 class FinetuneConfig:
     """Fine-tuning configuration"""
     csv_path: str = "contrastive_paired.csv"
-    checkpoint_path: str = "checkpoints/best_model.pt"
+    checkpoint_path: str = "checkpoints/best_model.safetensors"
     save_dir: str = "checkpoints"
     finetune_epochs: int = 20
     batch_size: int = 32
@@ -154,7 +157,7 @@ class FinetuneConfig:
 class PredictConfig:
     """Prediction configuration"""
     predict_csv: str = ""
-    checkpoint_path: str = "checkpoints/best_model.pt"
+    checkpoint_path: str = "checkpoints/best_model.safetensors"
     output_path: str = "predictions.csv"
     max_repeats: int = OLIGOMER_MAX_REPEATS
     batch_size: int = 32

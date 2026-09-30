@@ -20,6 +20,7 @@ from .model import PolymerRankingModel
 from .loss import MultiTaskBayesianRankingLoss
 from .dataset import PairDataset, CachedPairDataset, collate_fn, collate_cached_batch
 from .chemistry import load_and_preprocess
+from .checkpoint import save_checkpoint
 
 logger = logging.getLogger(__name__)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -144,6 +145,38 @@ def _random_split(n: int, test_ratio: float, val_ratio: float, seed: int):
     return np.sort(tr_idx), np.sort(va_idx), np.sort(te_idx)
 
 
+def _group_split(df, group_col: str, test_ratio: float, val_ratio: float, seed: int):
+    """Group-disjoint split (e.g. by ``doi``): no group spans two splits.
+
+    Each unique group (paper) is assigned, in a seeded random order, to exactly
+    one of test/val/train — growing test first, then validation, until their
+    pair-count targets are met. All pairs of a paper therefore stay together,
+    so paper-level bias (shared device fab, measurement setup, calibration)
+    cannot leak between train and evaluation. No pairs are dropped; the
+    achieved ratios are approximate because papers contribute different
+    numbers of pairs.
+    """
+    n = len(df)
+    dois = df[group_col].astype(str).values
+    unique_dois = np.unique(dois)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(unique_dois)
+    n_pairs = pd.Series(dois).value_counts()
+
+    counts = {"te": 0, "va": 0, "tr": 0}
+    members: Dict[str, list] = {"te": [], "va": [], "tr": []}
+    targets = {"te": round(test_ratio * n), "va": round(val_ratio * n)}
+    for d in unique_dois:
+        key = next((k for k in ("te", "va") if counts[k] < targets[k]), "tr")
+        members[key].append(d)
+        counts[key] += int(n_pairs[d])
+
+    te_idx = np.flatnonzero(np.isin(dois, members["te"]))
+    va_idx = np.flatnonzero(np.isin(dois, members["va"]))
+    tr_idx = np.flatnonzero(np.isin(dois, members["tr"]))
+    return tr_idx, va_idx, te_idx
+
+
 def leakage_report(df, tr_idx, va_idx, te_idx) -> Dict[str, float]:
     """How much information the test split shares with the training split.
 
@@ -185,6 +218,15 @@ def prepare_splits(df, cfg: TrainingConfig) -> Dict[str, Any]:
         if n_dropped:
             logger.info(f"Material-disjoint split dropped {n_dropped} pairs whose "
                         f"two materials fall in different splits")
+    elif cfg.split_by == "group":
+        if "doi" not in df.columns:
+            logger.warning("split_by='group' requires a 'doi' column; "
+                           "falling back to random split")
+            tr_idx, va_idx, te_idx = _random_split(
+                len(df), cfg.test_ratio, cfg.val_ratio, cfg.seed)
+        else:
+            tr_idx, va_idx, te_idx = _group_split(
+                df, "doi", cfg.test_ratio, cfg.val_ratio, cfg.seed)
     else:
         tr_idx, va_idx, te_idx = _random_split(
             len(df), cfg.test_ratio, cfg.val_ratio, cfg.seed)
@@ -536,10 +578,8 @@ def train(
     for k, v in te_met.items():
         logger.info(f"  {k:25s}: {v:.4f}")
 
-    meta = {
-        "model_state": model.state_dict(),
-        "scaler": splits["scaler"],
-        "config": mcfg.to_dict(),
+    model_state = model.state_dict()
+    extra = {
         "delta_scale": splits["delta_scale"],
         "loss_config": {
             "rank_weight": cfg.rank_weight,
@@ -548,13 +588,29 @@ def train(
         },
         "split_by": cfg.split_by,
     }
-    ckpt_path = Path(cfg.save_dir) / "best_model.pt"
-    torch.save(meta, ckpt_path)
-    logger.info(f"Checkpoint saved -> {ckpt_path}")
+    # group split keeps papers intact, so give its checkpoints a distinct
+    # default name to avoid silently overwriting the random-split model
+    ckpt_name = ("best_model_group.safetensors" if cfg.split_by == "group"
+                 else "best_model.safetensors")
+    ckpt_path = Path(cfg.save_dir) / ckpt_name
+    save_checkpoint(
+        ckpt_path,
+        model_state=model_state,
+        scaler=splits["scaler"],
+        config=mcfg.to_dict(),
+        extra=extra,
+    )
 
-    final_path = Path(cfg.save_dir) / "final_model.pt"
-    torch.save({**meta, "history": history}, final_path)
-    logger.info(f"Checkpoint saved -> {final_path}")
+    final_name = ("final_model_group.safetensors" if cfg.split_by == "group"
+                  else "final_model.safetensors")
+    final_path = Path(cfg.save_dir) / final_name
+    save_checkpoint(
+        final_path,
+        model_state=model_state,
+        scaler=splits["scaler"],
+        config=mcfg.to_dict(),
+        extra={**extra, "history": history},
+    )
 
     return {
         "test_metrics": te_met,
@@ -663,19 +719,18 @@ def finetune(config: FinetuneConfig) -> Dict[str, Any]:
     if stopper.best_state:
         model.load_state_dict({k: v.to(DEVICE) for k, v in stopper.best_state.items()})
 
-    final_ckpt_path = Path(config.save_dir) / "final_model.pt"
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "scaler": scaler,
-            "config": model_config.to_dict(),
+    final_ckpt_path = Path(config.save_dir) / "final_model.safetensors"
+    save_checkpoint(
+        final_ckpt_path,
+        model_state=model.state_dict(),
+        scaler=scaler,
+        config=model_config.to_dict(),
+        extra={
             "delta_scale": delta_scale,
             "loss_config": loss_cfg,
             "finetune_history": history,
         },
-        final_ckpt_path,
     )
-    logger.info(f"Final model saved -> {final_ckpt_path}")
 
     return {
         "final_checkpoint": final_ckpt_path,

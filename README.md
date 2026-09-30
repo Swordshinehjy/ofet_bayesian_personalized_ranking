@@ -25,6 +25,22 @@ repeat unit (with *) ──► cyclization ──► cyclic model compound ─�
 4. **Multi-task prediction**: μ\_e and μ\_h are predicted at the same time by a siamese network
    with shared weights.
 
+## Notes
+
+- **The literature data are extremely noisy** Random pair
+  splitting re-uses materials across train/test, leading to data leakage. When re-evaluated with a
+  leakage-free group split (groups by `doi`, so all pairs from the same paper stay in the same
+  split), the honestly measured model metrics are poor: only slightly better than a random ordering.
+  *Treat every reported performance in literature data with great caution.*
+- **The candidate space is derived from the known chemical space, not entirely new chemistry.** The
+  structures to be evaluated are variants of alkyl chains, substituents and functional groups on
+  known skeletons. For a molecule from a completely different family the performance will drop.
+- **The training data are literature values with high noise.** Repeat the hold-out several times
+  (different `--seed`, or `--n_repeats` in the search) and average — a single split moves the
+  pairwise accuracy by several points.
+- Early stopping monitors **pairwise accuracy**, not the loss: the loss is a weighted mixture of two
+  terms, so a lower loss does not necessarily mean a better ranking.
+
 ## Censored labels: mobility = 0 is *below the detection limit*
 
 A mobility of `0` in this dataset is **not** a missing measurement and **not** a real zero — it is
@@ -226,17 +242,6 @@ How to read the two numbers:
   part of the drop is not leakage but data loss: enforcing material-disjointness discards many
   pairs, so the model trains on much less data *and* is asked to extrapolate to polymers it has
   never seen a relative of. Do not use it as the headline metric.
-
-## Notes
-
-- **The candidate space is derived from the known chemical space, not entirely new chemistry.** The
-  structures to be evaluated are variants of alkyl chains, substituents and functional groups on
-  known skeletons. For a molecule from a completely different family the performance will drop.
-- **The training data are literature values with high noise.** Repeat the hold-out several times
-  (different `--seed`, or `--n_repeats` in the search) and average — a single split moves the
-  pairwise accuracy by several points.
-- Early stopping monitors **pairwise accuracy**, not the loss: the loss is a weighted mixture of two
-  terms, so a lower loss does not necessarily mean a better ranking.
 
 ## Output
 

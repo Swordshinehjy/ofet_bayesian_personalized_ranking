@@ -13,6 +13,7 @@ from .config import ModelConfig, TASK_NAMES, OLIGOMER_MAX_REPEATS
 from .model import PolymerRankingModel
 from .featurizer import create_featurizer
 from .chemistry import cyclize_polymer_with_cp_marking, cyclize_df, extra_feat
+from .checkpoint import load_checkpoint_dict
 
 logger = logging.getLogger(__name__)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -20,6 +21,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_checkpoint(
     checkpoint_path: str,
+    allow_unsafe_legacy: bool = False,
 ) -> Tuple[ModelConfig, Any, PolymerRankingModel, Dict[str, Any]]:
     """
     Load checkpoint, returns (model_config, scaler, model, meta).
@@ -28,8 +30,12 @@ def load_checkpoint(
     ``meta`` carries the training-time settings the loss depends on
     (``delta_scale``, ``loss_config``) so fine-tuning resumes with exactly the
     same objective instead of silently falling back to the defaults.
+
+    Reads safetensors + JSON metadata (no pickle). A legacy `.pt` is only
+    unpickled when ``allow_unsafe_legacy=True``.
     """
-    ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
+    ckpt = load_checkpoint_dict(checkpoint_path,
+                                allow_unsafe_legacy=allow_unsafe_legacy)
     model_config = ModelConfig.from_dict(ckpt["config"])
     scaler = ckpt["scaler"]
 

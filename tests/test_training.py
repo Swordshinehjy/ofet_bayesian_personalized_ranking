@@ -8,6 +8,7 @@ from polymer_ranking.training import (
     compute_delta_scale,
     compute_metrics,
     leakage_report,
+    _group_split,
     _material_split,
     _monitor_value,
     _stopper_mode,
@@ -250,3 +251,39 @@ class TestSplitting:
         tr, va, te = _material_split(df, 0.4, 0.2, seed=0)
         rep = leakage_report(df, tr, va, te)
         assert rep["test_material_overlap"] == 0.0
+
+    @pytest.fixture
+    def df_doi(self):
+        import pandas as pd
+        # 3 pairs per paper; P1 and P2 share materials across papers, so only
+        # the doi grouping (not materials) can keep the splits disjoint
+        return pd.DataFrame({
+            "doi": ["P1"] * 3 + ["P2"] * 3 + ["P3"] * 3 + ["P4"] * 3,
+            "Materials_1": ["A", "A", "B", "A", "A", "B", "C", "C", "D", "C", "C", "D"],
+            "Materials_2": ["B", "C", "C", "B", "D", "D", "A", "B", "B", "A", "D", "D"],
+        })
+
+    def test_group_split_is_doi_disjoint(self, df_doi):
+        tr, va, te = _group_split(df_doi, "doi", 0.25, 0.25, seed=0)
+        assert len(tr) + len(va) + len(te) == len(df_doi)  # no pairs dropped
+        assert len(te) > 0 and len(va) > 0 and len(tr) > 0
+
+        def dois(idx):
+            return set(df_doi["doi"].iloc[idx])
+
+        assert not (dois(tr) & dois(te))
+        assert not (dois(tr) & dois(va))
+        assert not (dois(va) & dois(te))
+
+    def test_group_split_is_reproducible(self, df_doi):
+        s1 = _group_split(df_doi, "doi", 0.25, 0.25, seed=7)
+        s2 = _group_split(df_doi, "doi", 0.25, 0.25, seed=7)
+        assert all(np.array_equal(a, b) for a, b in zip(s1, s2))
+
+    def test_group_split_sizes_track_targets(self, df_doi):
+        tr, va, te = _group_split(df_doi, "doi", 0.25, 0.25, seed=0)
+        # 4 papers x 3 pairs: targets are 3 test / 3 val pairs; the greedy fill
+        # must land within one paper's size of each target
+        assert len(te) <= 6
+        assert len(va) <= 6
+        assert len(tr) >= 3

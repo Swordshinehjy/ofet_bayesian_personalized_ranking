@@ -55,9 +55,13 @@ def add_common_args(p: argparse.ArgumentParser):
                    help="Quantity monitored by early stopping / LR scheduling")
     p.add_argument("--scheduler", choices=["plateau", "cosine"], default=None,
                    help="LR scheduler")
-    p.add_argument("--split_by", choices=["pair", "material"], default=None,
+    p.add_argument("--split_by", "--split_method", dest="split_by",
+                   choices=["pair", "material", "group"], default=None,
                    help="pair: random split over pairs (default); "
-                        "material: material-disjoint split (leakage diagnostic)")
+                        "material: material-disjoint split (leakage diagnostic); "
+                        "group: paper-disjoint split by doi — pairs from the "
+                        "same paper never cross train/val/test; the model is "
+                        "saved as checkpoints/best_model_group.safetensors")
     p.add_argument("--finetune_epochs",
                    type=int,
                    default=None,
