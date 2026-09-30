@@ -35,9 +35,6 @@ repeat unit (with *) ──► cyclization ──► cyclic model compound ─�
 - **The candidate space is derived from the known chemical space, not entirely new chemistry.** The
   structures to be evaluated are variants of alkyl chains, substituents and functional groups on
   known skeletons. For a molecule from a completely different family the performance will drop.
-- **The training data are literature values with high noise.** Repeat the hold-out several times
-  (different `--seed`, or `--n_repeats` in the search) and average — a single split moves the
-  pairwise accuracy by several points.
 - Early stopping monitors **pairwise accuracy**, not the loss: the loss is a weighted mixture of two
   terms, so a lower loss does not necessarily mean a better ranking.
 
