@@ -15,9 +15,6 @@ Why this replaces `torch.save`
 The old format pickled the fitted ``StandardScaler`` together with the tensors,
 so loading required ``torch.load(..., weights_only=False)`` — i.e. executing
 arbitrary code from the file. Nothing here can execute code when read.
-
-Legacy `.pt` checkpoints are still readable, but only when the caller opts in
-with ``allow_unsafe_legacy=True``.
 """
 
 import json
@@ -88,7 +85,6 @@ def save_checkpoint(
 def load_checkpoint_dict(
     checkpoint_path: str,
     device=None,
-    allow_unsafe_legacy: bool = False,
 ) -> Dict[str, Any]:
     """Load a checkpoint into a plain dict.
 
@@ -96,18 +92,11 @@ def load_checkpoint_dict(
     so existing callers keep working unchanged.
     """
     p = Path(checkpoint_path)
-    if p.suffix == ".pt":  # legacy pickle checkpoint
-        if not allow_unsafe_legacy:
-            raise RuntimeError(
-                f"{checkpoint_path} is a legacy pickle-based checkpoint and "
-                "cannot be read safely. Convert it with "
-                "`python convert_checkpoints.py` (or pass "
-                "allow_unsafe_legacy=True only for files you authored: "
-                "torch.load(weights_only=False) executes arbitrary code).")
-        logger.warning(
-            "Loading %s with weights_only=False: this executes the pickle "
-            "embedded in the file.", checkpoint_path)
-        return torch.load(p, map_location=device or "cpu", weights_only=False)
+    if p.suffix != ".safetensors":
+        raise ValueError(
+            f"{checkpoint_path}: only .safetensors checkpoints are supported. "
+            "Legacy pickle-based .pt files cannot be read safely "
+            "(torch.load(weights_only=False) executes arbitrary code).")
 
     device = str(device) if device is not None else "cpu"
     model_state: Dict[str, torch.Tensor] = {}
@@ -137,8 +126,3 @@ def load_checkpoint_dict(
                                   else n_seen)
         ckpt["scaler"] = scaler
     return ckpt
-
-
-def is_safe_format(checkpoint_path: str) -> bool:
-    """True when `checkpoint_path` is a safetensors checkpoint."""
-    return Path(checkpoint_path).suffix == ".safetensors"

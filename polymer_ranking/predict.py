@@ -21,7 +21,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_checkpoint(
     checkpoint_path: str,
-    allow_unsafe_legacy: bool = False,
 ) -> Tuple[ModelConfig, Any, PolymerRankingModel, Dict[str, Any]]:
     """
     Load checkpoint, returns (model_config, scaler, model, meta).
@@ -31,11 +30,9 @@ def load_checkpoint(
     (``delta_scale``, ``loss_config``) so fine-tuning resumes with exactly the
     same objective instead of silently falling back to the defaults.
 
-    Reads safetensors + JSON metadata (no pickle). A legacy `.pt` is only
-    unpickled when ``allow_unsafe_legacy=True``.
+    Reads safetensors + JSON metadata (no pickle).
     """
-    ckpt = load_checkpoint_dict(checkpoint_path,
-                                allow_unsafe_legacy=allow_unsafe_legacy)
+    ckpt = load_checkpoint_dict(checkpoint_path)
     model_config = ModelConfig.from_dict(ckpt["config"])
     scaler = ckpt["scaler"]
 

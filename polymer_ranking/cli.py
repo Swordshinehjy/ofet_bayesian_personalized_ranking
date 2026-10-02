@@ -2,6 +2,9 @@
 
 import logging
 import argparse
+import os
+import json
+from dataclasses import asdict
 
 import pandas as pd
 
@@ -11,15 +14,44 @@ from .predict import predict_batch
 
 logger = logging.getLogger(__name__)
 
+# File holding the best hyperparameters discovered by `hyperparam_search.py`.
+# When present, its values are used as config defaults; otherwise the
+# dataclass defaults apply. CLI flags always take precedence.
+BEST_HYPERPARAMS_PATH = "best_hyperparams.json"
 
-def merge_args(config_cls, args, arg_mapping: dict):
-    """Merge non-None CLI arguments into config dataclass."""
+
+def load_best_hyperparams(path: str = BEST_HYPERPARAMS_PATH) -> dict:
+    """Load best hyperparameters if the file exists, else return empty dict."""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            hyperparams = json.load(f)
+        logger.info(f"Loaded best hyperparameters from {path}: {hyperparams}")
+        return hyperparams
+    logger.info(f"{path} not found; falling back to default configuration")
+    return {}
+
+
+def merge_args(config_cls, args, arg_mapping: dict, base: dict = None):
+    """Merge a base dict (e.g. best hyperparameters) and non-None CLI arguments
+    into a config dataclass. CLI flags override base values, which override the
+    dataclass field defaults."""
     kwargs = {}
+    if base:
+        for field_name in config_cls.__dataclass_fields__:
+            if field_name in base:
+                kwargs[field_name] = base[field_name]
     for config_field, arg_name in arg_mapping.items():
         arg_val = getattr(args, arg_name)
         if arg_val is not None:
             kwargs[config_field] = arg_val
     return config_cls(**kwargs)
+
+
+def log_config(name: str, config):
+    """Pretty-print a config dataclass via the logger."""
+    logger.info(f"===== {name} =====")
+    for k, v in asdict(config).items():
+        logger.info(f"  {k:20s}: {v}")
 
 
 def add_common_args(p: argparse.ArgumentParser):
@@ -89,6 +121,9 @@ def main():
     add_common_args(p)
     args = p.parse_args()
 
+    # Load best hyperparameters if present; used as config defaults.
+    hyperparams = load_best_hyperparams()
+
     model_arg_map = {
         "hidden_size": "hidden_size",
         "depth": "depth",
@@ -117,8 +152,10 @@ def main():
     }
 
     if args.mode == "train":
-        model_config = merge_args(ModelConfig, args, model_arg_map)
-        train_config = merge_args(TrainingConfig, args, train_arg_map)
+        model_config = merge_args(ModelConfig, args, model_arg_map, base=hyperparams)
+        train_config = merge_args(TrainingConfig, args, train_arg_map, base=hyperparams)
+        log_config("ModelConfig", model_config)
+        log_config("TrainingConfig", train_config)
         results = train(model_config, train_config)
         logger.info("\n===== Final Test Metrics =====")
         for k, v in results["test_metrics"].items():
@@ -138,7 +175,8 @@ def main():
                 "max_repeats": "max_repeats",
                 "val_ratio": "val_ratio",
                 "patience": "patience",
-            })
+            }, base=hyperparams)
+        log_config("FinetuneConfig", finetune_config)
         results = finetune(finetune_config)
         logger.info(
             f"\n===== Final model saved to {results['final_checkpoint']} ====="
@@ -154,7 +192,7 @@ def main():
                 "output_path": "output",
                 "max_repeats": "max_repeats",
                 "batch_size": "batch_size",
-            })
+            }, base=hyperparams)
         df_new = pd.read_csv(predict_config.predict_csv)
         result = predict_batch(
             df_new=df_new,
