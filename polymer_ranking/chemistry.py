@@ -538,7 +538,7 @@ def censor_floor(df: pd.DataFrame, task: str) -> float:
     """Sentinel log-value for a censored (``mu = 0``) entry of ``task``.
 
     A mobility of ``0`` means the measurement came back below the detection
-    limit (*测不出来*), so the only thing we know is that it lies below every
+    limit, so the only thing we know is that it lies below every
     measured value. The sentinel is therefore placed ``CENSOR_LOG_MARGIN``
     decades below the smallest *measured* mobility of that task; it exists purely
     so that ``sign(y1 - y2)`` points the right way and is never used as a
