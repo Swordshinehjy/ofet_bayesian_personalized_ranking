@@ -115,6 +115,33 @@ def analyze(df: pd.DataFrame, seed: int = 42) -> Dict[str, Any]:
     idx = np.arange(len(df))
     tr_idx, te_idx = train_test_split(idx, test_size=0.1, random_state=seed)
     report.update(_baselines(df, tr_idx, te_idx))
+
+    # ``delta_scale`` must match what training uses: ``prepare_splits`` estimates
+    # it from the *train* split only, so use the same subset here instead of the
+    # whole file (the two differ by ~6% on the bundled data).
+    for t in TASKS:
+        ok1, ok2 = df[f"ok_{t}_1"].values, df[f"ok_{t}_2"].values
+        both = ok1 & ok2
+        chosen = np.flatnonzero(both)[np.isin(np.flatnonzero(both), tr_idx)]
+        dy = (df[f"log_{t}_1"] - df[f"log_{t}_2"]).values[chosen]
+        report[f"{t}_delta_std_train"] = round(float(dy.std()), 3) if len(dy) > 1 else 0.0
+
+    # how often the same material is reported with different mobilities — this
+    # is irreducible label noise and puts a ceiling on any achievable accuracy
+    for t in TASKS:
+        inconsistent = 0
+        materials = 0
+        for s in ("1", "2"):
+            if f"Materials_{s}" not in df.columns:
+                continue
+            measured = df.loc[df[f"ok_{t}_{s}"], [f"Materials_{s}", f"{t}_{s}"]]
+            grp = measured.groupby(f"Materials_{s}")[f"{t}_{s}"].nunique()
+            materials += int(len(grp))
+            inconsistent += int((grp > 1).sum())
+        if materials:
+            report[f"{t}_material_label_conflicts"] = inconsistent
+            report[f"{t}_material_label_conflict_frac"] = round(
+                inconsistent / materials, 3)
     return report
 
 
@@ -178,10 +205,18 @@ def print_report(report: Dict[str, Any]) -> None:
               f"ordering (ranking target known, including {report.get(f'{t}_one_censored')} "
               f"with one censored side). {report.get(f'{t}_both_censored')} pairs are "
               f"censored on both sides and carry no ordering information.")
-        std = report.get(f"{t}_delta_std")
+        std = report.get(f"{t}_delta_std_train", report.get(f"{t}_delta_std"))
         if std:
-            print(f"  {t}: std of the log10 difference = {std} -> delta_scale should be "
-                  f"close to this so the regression term stays comparable to the BPR term.")
+            print(f"  {t}: std of the log10 difference (train split) = {std} -> "
+                  f"delta_scale should be close to this so the regression term "
+                  f"stays comparable to the BPR term.")
+        conflicts = report.get(f"{t}_material_label_conflicts")
+        if conflicts:
+            print(f"  {t}: {conflicts} materials are reported with different "
+                  f"mobilities in different pairs "
+                  f"({report[f'{t}_material_label_conflict_frac']:.1%} of the "
+                  f"materials with a measured value) — irreducible label noise "
+                  f"that caps any achievable accuracy.")
     reuse = report.get("material_reuse_mean")
     if reuse:
         print(f"  Each material appears in ~{reuse} pairs; a random pair-level split "
@@ -316,6 +351,11 @@ def check_config(
         add("WARN", "rank/reg weights", f"{tcfg.rank_weight}/{tcfg.reg_weight}",
             "the regression term outweighs the ranking term, but ranking is the objective",
             "use rank_weight >= 2 * reg_weight (measured optimum here: 0.9 / 0.1)")
+    elif tcfg.reg_weight > 0 and tcfg.rank_weight < 2 * tcfg.reg_weight:
+        add("WARN", "rank/reg weights", f"{tcfg.rank_weight}/{tcfg.reg_weight}",
+            "the regression term is a sizeable share of the objective; it should "
+            "only anchor the score scale",
+            "use rank_weight >= 2 * reg_weight (measured optimum here: 0.9 / 0.1)")
     elif tcfg.rank_weight <= 0:
         add("ERROR", "rank_weight", tcfg.rank_weight, "ranking supervision is switched off",
             "use >= 0.5")
@@ -330,9 +370,13 @@ def check_config(
         add("WARN", "censored_weight", tcfg.censored_weight,
             "pairs with a censored mobility (mu = 0) are dropped from the ranking loss, "
             "although their ordering is known", "use 1.0 (measured optimum here)")
-    else:
+    elif tcfg.censored_weight < 1.0:
         add("OK", "censored_weight", tcfg.censored_weight,
             "censored pairs contribute with a reduced weight", "-")
+    else:
+        add("OK", "censored_weight", tcfg.censored_weight,
+            "censored pairs are weighted like fully measured ones "
+            "(their direction is certain, only the magnitude is unknown)", "-")
 
     # ---- delta_scale ------------------------------------------------------
     ds = tcfg.delta_scale
@@ -629,8 +673,11 @@ def recommend(
 ) -> Dict[str, Any]:
     """Combine the search / ablation output into one recommended configuration."""
     best = dict(search_results[0]) if search_results else {}
-    delta_scale = max(report.get("mu_e_delta_std", 1.0),
-                      report.get("mu_h_delta_std", 1.0), 1e-3)
+    # prefer the train-split estimate (the one training actually uses); the
+    # whole-file number is only a fallback for older reports
+    pair = [(report.get(f"{t}_delta_std_train", report.get(f"{t}_delta_std", 1.0)))
+            for t in TASKS]
+    delta_scale = max([p for p in pair if p] + [1e-3])
 
     rank_w, reg_w = best.get("rank_weight", 0.8), best.get("reg_weight", 0.2)
     cens_w = best.get("censored_weight", 0.5)
@@ -663,6 +710,10 @@ def recommend(
         "split_by": fallback.split_by,
         "val_mean_acc_from_search": best.get("val_mean_acc"),
         "n_trials": len(search_results),
+        # documenting what was *not* searched avoids mistaking these three for
+        # measured optima
+        "notes": ("epochs / patience / split_by are fixed defaults, not search "
+                  "results; delta_scale comes from the train-split std"),
     }
 
 
@@ -710,6 +761,9 @@ def parse_args() -> argparse.Namespace:
                    help="Custom censored weights, e.g. --censored_weights 0.3 0.5 1.0")
     p.add_argument("--out_csv", type=str, default="hyperparam_search.csv")
     p.add_argument("--out_json", type=str, default="best_hyperparams.json")
+    p.add_argument("--config", type=str, default=None,
+                   help="JSON file holding the configuration to check; defaults "
+                        "to --out_json (best_hyperparams.json)")
     return p.parse_args()
 
 
@@ -741,8 +795,32 @@ def _base_from_json(path: str) -> Dict[str, Any]:
               "rank_weight", "reg_weight"):
         if k in d:
             base[k] = d[k]
-    base["loss_weights"] = (base.pop("rank_weight"), base.pop("reg_weight"))
+    # tolerate incomplete / hand-edited JSON: every field falls back to
+    # DEFAULT_BASE instead of raising KeyError and killing the whole run
+    rank = base.pop("rank_weight", DEFAULT_BASE["loss_weights"][0])
+    reg = base.pop("reg_weight", DEFAULT_BASE["loss_weights"][1])
+    base["loss_weights"] = (rank, reg)
     return base
+
+
+def _configs_from_base(base: Dict[str, Any], csv_path: str):
+    """ModelConfig / TrainingConfig for the configuration actually in use."""
+    mcfg = ModelConfig(
+        hidden_size=base["hidden_size"],
+        depth=base["depth"],
+        dropout=base["dropout"],
+        ffn_hidden=base["ffn_hidden"],
+    )
+    tcfg = TrainingConfig(
+        csv_path=csv_path,
+        lr=base["lr"],
+        weight_decay=base["weight_decay"],
+        batch_size=base["batch_size"],
+        censored_weight=base["censored_weight"],
+        rank_weight=base["loss_weights"][0],
+        reg_weight=base["loss_weights"][1],
+    )
+    return mcfg, tcfg
 
 
 def _base_from_search(search_results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -766,8 +844,20 @@ def main() -> int:
     args = parse_args()
 
     print("Preprocessing data (cyclization + oligomer expansion)...")
-    mcfg = ModelConfig()
-    tcfg = TrainingConfig(csv_path=args.csv)
+    # Start from the configuration that is actually in use (``--config``, else
+    # best_hyperparams.json, else the dataclass defaults) instead of always
+    # checking the hard-coded defaults — otherwise `--stage check` can report OK
+    # for a config nobody trains with.
+    base_src = args.config or args.out_json
+    base = _base_from_json(base_src)
+    if args.config:
+        print(f"Checking configuration from {args.config}")
+    elif Path(args.out_json).exists():
+        print(f"Checking configuration from {args.out_json}")
+    else:
+        print(f"{args.out_json} not found; checking the dataclass defaults")
+
+    mcfg, tcfg = _configs_from_base(base, args.csv)
     df = load_and_preprocess(args.csv, depth=mcfg.depth, max_repeats=tcfg.max_repeats)
     print(f"Loaded {len(df)} valid pairs\n")
 

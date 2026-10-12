@@ -8,12 +8,16 @@ import pandas as pd
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 
+import logging
+
 from chemprop.data.molgraph import MolGraph
 from chemprop.data.collate import BatchMolGraph
 
 from .featurizer import create_featurizer
 from .chemistry import extra_feat
 from .config import TASK_NAMES
+
+logger = logging.getLogger(__name__)
 
 OK_COLS = [f"ok_{t}_{{s}}" for t in TASK_NAMES]
 
@@ -46,16 +50,37 @@ class _BasePairDataset(Dataset):
         self.graphs1: List[MolGraph] = []
         self.graphs2: List[MolGraph] = []
         valid_indices: List[int] = []
+        skipped: List[int] = []
         for idx in range(len(self.df)):
             mol1 = self.df.loc[idx, "mol_1"]
             mol2 = self.df.loc[idx, "mol_2"]
-            g1 = self.featurizer(mol1) if mol1 else None
-            g2 = self.featurizer(mol2) if mol2 else None
-            if g1 is not None and g2 is not None:
-                self.graphs1.append(g1)
-                self.graphs2.append(g2)
-                valid_indices.append(idx)
+            # ``mol`` can be None when cyclization failed upstream. Note that an
+            # RDKit Mol itself is always truthy (it defines neither __bool__ nor
+            # __len__), so this must be an explicit `is not None` check.
+            if mol1 is None or mol2 is None:
+                skipped.append(idx)
+                continue
+            try:
+                g1 = self.featurizer(mol1)
+                g2 = self.featurizer(mol2)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    f"Featurization failed for row {idx}: {exc}; row skipped")
+                skipped.append(idx)
+                continue
+            self.graphs1.append(g1)
+            self.graphs2.append(g2)
+            valid_indices.append(idx)
 
+        if skipped:
+            logger.warning(
+                f"{len(skipped)} of {len(self.df)} rows dropped: cyclization or "
+                f"featurization failed (row indices {skipped[:10]}"
+                f"{'...' if len(skipped) > 10 else ''})")
+
+        # positional indices into the DataFrame handed in by the caller, kept
+        # so that callers can map dataset rows back to the original frame
+        self.kept_indices = np.asarray(valid_indices, dtype=int)
         self.df = self.df.iloc[valid_indices].reset_index(drop=True)
 
         ef1 = extra_feat(self.df, "1")
@@ -70,8 +95,10 @@ class _BasePairDataset(Dataset):
         self.ef1 = self.scaler.transform(ef1) if self.scaler else ef1
         self.ef2 = self.scaler.transform(ef2) if self.scaler else ef2
 
-        self.y1 = self.df[[f"log_{t}_1" for t in TASK_NAMES]].values.astype(np.float32)
-        self.y2 = self.df[[f"log_{t}_2" for t in TASK_NAMES]].values.astype(np.float32)
+        self.y1 = self.df[[f"log_{t}_1"
+                           for t in TASK_NAMES]].values.astype(np.float32)
+        self.y2 = self.df[[f"log_{t}_2"
+                           for t in TASK_NAMES]].values.astype(np.float32)
 
         # A mobility of 0 is left-censored (below the detection limit): the
         # ordering is still decidable, the numeric difference is not.
@@ -182,6 +209,5 @@ def collate_cached_batch(batch):
     if len(batch) != 1:
         raise ValueError(
             "CachedPairDataset must be used with DataLoader(batch_size=1); "
-            f"got a collated batch of {len(batch)} items"
-        )
+            f"got a collated batch of {len(batch)} items")
     return batch[0]

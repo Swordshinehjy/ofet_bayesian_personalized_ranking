@@ -29,6 +29,7 @@ OLIGOMER_MAX_REPEATS = 8
 CENSOR_LOG_MARGIN = 1.0
 
 SPLIT_MODES = ("pair", "material", "group")
+DEVICE_MODES = ("auto", "cpu", "cuda")
 
 
 def min_span_for_depth(depth: int = DEFAULT_DEPTH) -> int:
@@ -61,6 +62,19 @@ class ModelConfig:
         if self.aggregation not in valid:
             raise ValueError(
                 f"aggregation must be one of {sorted(valid)}, got {self.aggregation!r}")
+        if self.hidden_size < 1:
+            raise ValueError(f"hidden_size must be >= 1, got {self.hidden_size}")
+        if self.ffn_hidden < 1:
+            raise ValueError(f"ffn_hidden must be >= 1, got {self.ffn_hidden}")
+        if self.depth < 1:
+            raise ValueError(f"depth must be >= 1, got {self.depth}")
+        if self.num_tasks < 1:
+            raise ValueError(f"num_tasks must be >= 1, got {self.num_tasks}")
+        if self.extra_dim < 0:
+            raise ValueError(f"extra_dim must be >= 0, got {self.extra_dim}")
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError(
+                f"dropout must be in [0, 1), got {self.dropout!r}")
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -115,6 +129,12 @@ class TrainingConfig:
     #                 in a single split); guards against paper-level bias such
     #                 as shared device fab / measurement setup
     split_by: str = "pair"
+    # device used for training ("auto" = cuda when available)
+    device: str = "auto"
+    # Drop rows whose (unordered) material pair already appeared earlier in the
+    # file. Duplicate comparisons can land on both sides of a random split and
+    # inflate the reported pairwise accuracy.
+    drop_duplicate_pairs: bool = False
 
     def __post_init__(self):
         if not 0 < self.test_ratio < 1:
@@ -134,6 +154,41 @@ class TrainingConfig:
         if self.split_by not in SPLIT_MODES:
             raise ValueError(
                 f"split_by must be one of {list(SPLIT_MODES)}, got {self.split_by!r}")
+        if self.device not in DEVICE_MODES:
+            raise ValueError(
+                f"device must be one of {list(DEVICE_MODES)}, got {self.device!r}")
+        # structural validation: anything *representable* (a very small lr, no
+        # weight decay, ...) is left to ``hyperparam_search.py --stage check``,
+        # which turns it into warning + suggestion instead of refusing to run.
+        if self.epochs < 1:
+            raise ValueError(f"epochs must be >= 1, got {self.epochs}")
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
+        if self.patience < 1:
+            raise ValueError(f"patience must be >= 1, got {self.patience}")
+        if self.max_repeats < 1:
+            raise ValueError(f"max_repeats must be >= 1, got {self.max_repeats}")
+        if not self.lr > 0:
+            raise ValueError(f"lr must be > 0, got {self.lr!r}")
+        if self.weight_decay < 0:
+            raise ValueError(f"weight_decay must be >= 0, got {self.weight_decay!r}")
+        if self.rank_weight < 0 or self.reg_weight < 0:
+            raise ValueError(
+                f"rank_weight/reg_weight must be >= 0, got "
+                f"{self.rank_weight!r}/{self.reg_weight!r}")
+        if self.rank_weight + self.reg_weight <= 0:
+            raise ValueError(
+                "rank_weight + reg_weight must be > 0; otherwise both loss terms "
+                "are switched off")
+        if not 0.0 <= self.censored_weight <= 1.0:
+            raise ValueError(
+                f"censored_weight must be in [0, 1], got {self.censored_weight!r}")
+        if self.delta_scale is not None and not self.delta_scale > 0:
+            raise ValueError(
+                f"delta_scale must be > 0 or None (auto), got {self.delta_scale!r}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -151,6 +206,31 @@ class FinetuneConfig:
     # hold out a validation split so fine-tuning is monitored instead of blind
     val_ratio: float = 0.1
     patience: int = 10
+    device: str = "auto"
+    drop_duplicate_pairs: bool = False
+
+    def __post_init__(self):
+        if not 0 <= self.val_ratio < 1:
+            raise ValueError(f"val_ratio must be in [0, 1), got {self.val_ratio}")
+        if self.finetune_epochs < 1:
+            raise ValueError(
+                f"finetune_epochs must be >= 1, got {self.finetune_epochs}")
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
+        if self.patience < 1:
+            raise ValueError(f"patience must be >= 1, got {self.patience}")
+        if self.max_repeats < 1:
+            raise ValueError(f"max_repeats must be >= 1, got {self.max_repeats}")
+        if not self.lr > 0:
+            raise ValueError(f"lr must be > 0, got {self.lr!r}")
+        if self.weight_decay < 0:
+            raise ValueError(f"weight_decay must be >= 0, got {self.weight_decay!r}")
+        if self.device not in DEVICE_MODES:
+            raise ValueError(
+                f"device must be one of {list(DEVICE_MODES)}, got {self.device!r}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -161,3 +241,56 @@ class PredictConfig:
     output_path: str = "predictions.csv"
     max_repeats: int = OLIGOMER_MAX_REPEATS
     batch_size: int = 32
+    device: str = "auto"
+
+    def __post_init__(self):
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
+        if self.max_repeats < 1:
+            raise ValueError(f"max_repeats must be >= 1, got {self.max_repeats}")
+        if self.device not in DEVICE_MODES:
+            raise ValueError(
+                f"device must be one of {list(DEVICE_MODES)}, got {self.device!r}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def resolve_device(device: str = "auto") -> "torch.device":  # noqa: F821
+    """Turn a ``DEVICE_MODES`` string into a ``torch.device``.
+
+    ``auto`` picks CUDA when it is available; asking for CUDA explicitly on a
+    machine without a GPU is an error rather than a silent fallback, so a typo
+    in the config cannot hide a CPU-only run.
+    """
+    import torch
+
+    if device == "cuda" and not torch.cuda.is_available():
+        raise ValueError(
+            "device='cuda' was requested but torch.cuda.is_available() is False")
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
+_DEFAULT_DEVICE: Optional["torch.device"] = None  # noqa: F821
+
+
+def set_default_device(device: str = "auto") -> "torch.device":  # noqa: F821
+    """Set the process-wide device used by training / fine-tuning / prediction.
+
+    Modules must read :func:`get_default_device` instead of capturing a
+    ``torch.device`` at import time, otherwise ``--device`` could not take
+    effect after the module graph is loaded.
+    """
+    global _DEFAULT_DEVICE
+    _DEFAULT_DEVICE = resolve_device(device)
+    return _DEFAULT_DEVICE
+
+
+def get_default_device() -> "torch.device":  # noqa: F821
+    """The device configured via :func:`set_default_device` (auto-detected once)."""
+    global _DEFAULT_DEVICE
+    if _DEFAULT_DEVICE is None:
+        _DEFAULT_DEVICE = resolve_device("auto")
+    return _DEFAULT_DEVICE

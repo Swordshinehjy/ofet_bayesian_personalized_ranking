@@ -9,8 +9,6 @@ from chemprop.featurizers.atom import MultiHotAtomFeaturizer
 from chemprop.featurizers.bond import MultiHotBondFeaturizer
 from chemprop.conf import DEFAULT_BOND_FDIM
 
-from .config import CP_FEATURE_DIM
-
 
 class CustomMultiHotAtomFeaturizer(MultiHotAtomFeaturizer):
     """

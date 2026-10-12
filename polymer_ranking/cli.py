@@ -99,6 +99,12 @@ def add_common_args(p: argparse.ArgumentParser):
                    default=None,
                    help="Fine-tuning epoch count")
     p.add_argument("--finetune_lr", type=float, default=None, help="Fine-tuning learning rate")
+    p.add_argument("--device", choices=["auto", "cpu", "cuda"], default=None,
+                   help="Compute device (default: cuda when available)")
+    p.add_argument("--aggregation", choices=["mean", "sum", "norm"], default=None,
+                   help="D-MPNN atom aggregation")
+    p.add_argument("--drop_duplicate_pairs", action="store_true", default=None,
+                   help="Drop repeated (unordered) material pairs before splitting")
 
 
 def main():
@@ -108,7 +114,8 @@ def main():
         datefmt="%H:%M:%S",
         encoding="utf-8",
         handlers=[
-            logging.FileHandler("result.log"), 
+            # overwrite instead of appending forever across runs
+            logging.FileHandler("result.log", mode="w", encoding="utf-8"),
             logging.StreamHandler()
         ]
     )
@@ -129,6 +136,7 @@ def main():
         "depth": "depth",
         "dropout": "dropout",
         "ffn_hidden": "ffn_hidden",
+        "aggregation": "aggregation",
     }
     train_arg_map = {
         "csv_path": "csv",
@@ -149,6 +157,8 @@ def main():
         "early_stop_metric": "early_stop_metric",
         "scheduler": "scheduler",
         "split_by": "split_by",
+        "device": "device",
+        "drop_duplicate_pairs": "drop_duplicate_pairs",
     }
 
     if args.mode == "train":
@@ -175,11 +185,16 @@ def main():
                 "max_repeats": "max_repeats",
                 "val_ratio": "val_ratio",
                 "patience": "patience",
+                "device": "device",
+                "drop_duplicate_pairs": "drop_duplicate_pairs",
             }, base=hyperparams)
         log_config("FinetuneConfig", finetune_config)
         results = finetune(finetune_config)
         logger.info(
-            f"\n===== Final model saved to {results['final_checkpoint']} ====="
+            f"\n===== Final model (last epoch) saved to {results['final_checkpoint']} ====="
+        )
+        logger.info(
+            f"===== Best-validation model saved to {results['best_checkpoint']} ====="
         )
 
     elif args.mode == "predict":
@@ -192,6 +207,7 @@ def main():
                 "output_path": "output",
                 "max_repeats": "max_repeats",
                 "batch_size": "batch_size",
+                "device": "device",
             }, base=hyperparams)
         df_new = pd.read_csv(predict_config.predict_csv)
         result = predict_batch(
@@ -200,5 +216,9 @@ def main():
             output_path=predict_config.output_path,
             max_repeats=predict_config.max_repeats,
             batch_size=predict_config.batch_size,
+            device=predict_config.device,
         )
-        logger.info(result[["Materials_1", "Materials_2", "preferred_mu_e", "prob_mu_e", "preferred_mu_h", "prob_mu_h"]])
+        show = [c for c in ["Materials_1", "Materials_2", "preferred_mu_e",
+                            "prob_mu_e", "preferred_mu_h", "prob_mu_h"]
+                if c in result.columns]
+        logger.info(result[show].to_string())

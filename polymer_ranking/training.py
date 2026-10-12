@@ -15,15 +15,27 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
 from sklearn.model_selection import train_test_split
 from scipy.stats import spearmanr
 
-from .config import ModelConfig, TrainingConfig, FinetuneConfig, TASK_NAMES
+from .config import (
+    ModelConfig,
+    TrainingConfig,
+    FinetuneConfig,
+    TASK_NAMES,
+    get_default_device,
+    set_default_device,
+)
 from .model import PolymerRankingModel
 from .loss import MultiTaskBayesianRankingLoss
 from .dataset import PairDataset, CachedPairDataset, collate_fn, collate_cached_batch
-from .chemistry import load_and_preprocess
+from .chemistry import apply_censor_floor, load_and_preprocess
 from .checkpoint import save_checkpoint
 
 logger = logging.getLogger(__name__)
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def seed_everything(seed: int) -> None:
+    """Seed torch / numpy so a run -- and every search trial -- is reproducible."""
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
 
 
 class EarlyStopping:
@@ -33,14 +45,16 @@ class EarlyStopping:
     mode="max" -> higher is better (e.g. pairwise accuracy)
     """
 
-    def __init__(self, patience: int = 20, delta: float = 1e-4, mode: str = "min"):
+    def __init__(self,
+                 patience: int = 20,
+                 delta: float = 1e-4,
+                 mode: str = "min"):
         if mode not in ("min", "max"):
             raise ValueError(f"mode must be 'min' or 'max', got {mode}")
         self.patience = patience
         self.delta = delta
         self.mode = mode
         self.best_score = float("inf") if mode == "min" else float("-inf")
-        self.best_loss = self.best_score
         self.counter = 0
         self.best_state: Optional[Dict] = None
 
@@ -52,17 +66,18 @@ class EarlyStopping:
 
         if improved:
             self.best_score = value
-            self.best_loss = value
             self.counter = 0
             self.best_state = {
-                k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+                k: v.detach().cpu().clone()
+                for k, v in model.state_dict().items()
             }
         else:
             self.counter += 1
         return self.counter >= self.patience
 
 
-def compute_delta_scale(y1: np.ndarray, y2: np.ndarray, ok: np.ndarray) -> float:
+def compute_delta_scale(y1: np.ndarray, y2: np.ndarray,
+                        ok: np.ndarray) -> float:
     """Std of the measured log10 mobility differences.
 
     Normalizes the delta-regression target so that it stays in the same order of
@@ -81,13 +96,16 @@ def compute_delta_scale(y1: np.ndarray, y2: np.ndarray, ok: np.ndarray) -> float
 
 # ── data splitting ──────────────────────────────────────────────────────────
 
+
 def _pair_keys(df: pd.DataFrame) -> np.ndarray:
     """Order-insensitive key of a row: the frozenset of its two materials."""
-    m1 = df["Materials_1"].astype(str).values if "Materials_1" in df.columns else None
-    m2 = df["Materials_2"].astype(str).values if "Materials_2" in df.columns else None
+    m1 = df["Materials_1"].astype(
+        str).values if "Materials_1" in df.columns else None
+    m2 = df["Materials_2"].astype(
+        str).values if "Materials_2" in df.columns else None
     if m1 is None or m2 is None:
         return np.arange(len(df)).astype(str)
-    return np.array([ "||".join(sorted([a, b])) for a, b in zip(m1, m2)])
+    return np.array(["||".join(sorted([a, b])) for a, b in zip(m1, m2)])
 
 
 def _material_split(df, test_ratio: float, val_ratio: float, seed: int):
@@ -130,22 +148,27 @@ def _material_split(df, test_ratio: float, val_ratio: float, seed: int):
     va_mats = grow(round(val_ratio * n), forbidden=te_mats)
     tr_mats = {str(m) for m in materials} - te_mats - va_mats
 
-    return (np.flatnonzero(inside(tr_mats)),
-            np.flatnonzero(inside(va_mats)),
+    return (np.flatnonzero(inside(tr_mats)), np.flatnonzero(inside(va_mats)),
             np.flatnonzero(inside(te_mats)))
+
 
 def _random_split(n: int, test_ratio: float, val_ratio: float, seed: int):
     idx = np.arange(n)
-    tr_idx, te_idx = train_test_split(idx, test_size=test_ratio, random_state=seed)
+    tr_idx, te_idx = train_test_split(idx,
+                                      test_size=test_ratio,
+                                      random_state=seed)
     if val_ratio > 0:
-        tr_idx, va_idx = train_test_split(
-            tr_idx, test_size=val_ratio / (1 - test_ratio), random_state=seed)
+        tr_idx, va_idx = train_test_split(tr_idx,
+                                          test_size=val_ratio /
+                                          (1 - test_ratio),
+                                          random_state=seed)
     else:
         va_idx = np.array([], dtype=int)
     return np.sort(tr_idx), np.sort(va_idx), np.sort(te_idx)
 
 
-def _group_split(df, group_col: str, test_ratio: float, val_ratio: float, seed: int):
+def _group_split(df, group_col: str, test_ratio: float, val_ratio: float,
+                 seed: int):
     """Group-disjoint split (e.g. by ``doi``): no group spans two splits.
 
     Each unique group (paper) is assigned, in a seeded random order, to exactly
@@ -209,52 +232,119 @@ def leakage_report(df, tr_idx, va_idx, te_idx) -> Dict[str, float]:
     return out
 
 
+def _drop_duplicate_pairs(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep the first occurrence of every (unordered) material pair.
+
+    Duplicate comparisons carry no extra information, but under a random pair
+    split they can land on both sides of train/test and inflate the reported
+    accuracy.
+    """
+    keys = _pair_keys(df)
+    if isinstance(keys, np.ndarray) and keys.dtype.kind in ("U", "S"):
+        # real material names -> dedupe identical unordered pairs
+        seen: Dict[str, bool] = {}
+        keep = []
+        for k in keys:
+            if k in seen:
+                keep.append(False)
+            else:
+                seen[k] = True
+                keep.append(True)
+        mask = np.asarray(keep, dtype=bool)
+    else:  # pragma: no cover - _pair_keys falls back to unique row indices
+        mask = np.ones(len(df), dtype=bool)
+    dropped = int((~mask).sum())
+    if dropped:
+        logger.info(f"Dropped {dropped} duplicate (unordered) material pairs")
+    return df.loc[mask].reset_index(drop=True)
+
+
 def prepare_splits(df, cfg: TrainingConfig) -> Dict[str, Any]:
     """Build train/val/test datasets and loaders for a preprocessed DataFrame."""
+    if getattr(cfg, "drop_duplicate_pairs", False):
+        df = _drop_duplicate_pairs(df)
+
     if cfg.split_by == "material":
-        tr_idx, va_idx, te_idx = _material_split(
-            df, cfg.test_ratio, cfg.val_ratio, cfg.seed)
+        tr_idx, va_idx, te_idx = _material_split(df, cfg.test_ratio,
+                                                 cfg.val_ratio, cfg.seed)
         n_dropped = len(df) - (len(tr_idx) + len(va_idx) + len(te_idx))
         if n_dropped:
-            logger.info(f"Material-disjoint split dropped {n_dropped} pairs whose "
-                        f"two materials fall in different splits")
+            logger.info(
+                f"Material-disjoint split dropped {n_dropped} pairs whose "
+                f"two materials fall in different splits")
     elif cfg.split_by == "group":
         if "doi" not in df.columns:
             logger.warning("split_by='group' requires a 'doi' column; "
                            "falling back to random split")
-            tr_idx, va_idx, te_idx = _random_split(
-                len(df), cfg.test_ratio, cfg.val_ratio, cfg.seed)
+            tr_idx, va_idx, te_idx = _random_split(len(df), cfg.test_ratio,
+                                                   cfg.val_ratio, cfg.seed)
         else:
-            tr_idx, va_idx, te_idx = _group_split(
-                df, "doi", cfg.test_ratio, cfg.val_ratio, cfg.seed)
+            tr_idx, va_idx, te_idx = _group_split(df, "doi", cfg.test_ratio,
+                                                  cfg.val_ratio, cfg.seed)
     else:
-        tr_idx, va_idx, te_idx = _random_split(
-            len(df), cfg.test_ratio, cfg.val_ratio, cfg.seed)
+        tr_idx, va_idx, te_idx = _random_split(len(df), cfg.test_ratio,
+                                               cfg.val_ratio, cfg.seed)
 
-    tr_ds = PairDataset(df.iloc[tr_idx], fit_scaler=True)
+    # Each split gets its own censoring sentinel, derived from that split alone,
+    # so no held-out label influences another split's targets (see
+    # ``chemistry.apply_censor_floor``). The sentinel carries no numeric
+    # information — only the sign of the comparison depends on it.
+    tr_df = apply_censor_floor(df.iloc[tr_idx])
+    va_df = apply_censor_floor(df.iloc[va_idx]) if len(va_idx) else df.iloc[va_idx]
+    te_df = apply_censor_floor(df.iloc[te_idx])
+
+    tr_ds = PairDataset(tr_df, fit_scaler=True)
     has_val = len(va_idx) > 0
-    va_ds = (CachedPairDataset(df.iloc[va_idx], cfg.batch_size, scaler=tr_ds.scaler)
-             if has_val else None)
-    te_ds = CachedPairDataset(df.iloc[te_idx], cfg.batch_size, scaler=tr_ds.scaler)
+    va_ds = (CachedPairDataset(va_df, cfg.batch_size,
+                               scaler=tr_ds.scaler) if has_val else None)
+    te_ds = CachedPairDataset(te_df, cfg.batch_size, scaler=tr_ds.scaler)
 
-    tr_loader = DataLoader(tr_ds, batch_size=cfg.batch_size, shuffle=True,
-                           collate_fn=collate_fn, num_workers=0)
-    va_loader = (DataLoader(va_ds, batch_size=1, shuffle=False,
-                            collate_fn=collate_cached_batch)
+    tr_loader = DataLoader(tr_ds,
+                           batch_size=cfg.batch_size,
+                           shuffle=True,
+                           collate_fn=collate_fn,
+                           num_workers=0)
+    va_loader = (DataLoader(
+        va_ds, batch_size=1, shuffle=False, collate_fn=collate_cached_batch)
                  if has_val else None)
-    te_loader = DataLoader(te_ds, batch_size=1, shuffle=False,
+    te_loader = DataLoader(te_ds,
+                           batch_size=1,
+                           shuffle=False,
                            collate_fn=collate_cached_batch)
 
     ok = tr_ds.ok1 & tr_ds.ok2
-    delta_scale = cfg.delta_scale or compute_delta_scale(tr_ds.y1, tr_ds.y2, ok)
+    delta_scale = cfg.delta_scale or compute_delta_scale(
+        tr_ds.y1, tr_ds.y2, ok)
+
+    # Report leakage on the rows the model actually saw: every dataset silently
+    # drops rows whose molecules could not be featurized, so mapping back through
+    # ``kept_indices`` keeps the diagnostics and ``sizes`` on the same footing.
+    def _used(idx, ds):
+        idx = np.asarray(idx, dtype=int)
+        return idx[ds.kept_indices] if len(idx) else idx
+
+    tr_used = _used(tr_idx, tr_ds)
+    va_used = _used(va_idx, va_ds) if has_val else np.asarray([], dtype=int)
+    te_used = _used(te_idx, te_ds)
+
+    n_lost = len(df) - (len(tr_used) + len(va_used) + len(te_used))
+    if n_lost:
+        logger.info(f"{n_lost} pairs were not usable "
+                    f"(split assignment or featurization) and were excluded")
 
     return {
-        "tr_ds": tr_ds, "va_ds": va_ds, "te_ds": te_ds,
-        "tr_loader": tr_loader, "va_loader": va_loader, "te_loader": te_loader,
-        "scaler": tr_ds.scaler, "delta_scale": float(delta_scale),
+        "tr_ds": tr_ds,
+        "va_ds": va_ds,
+        "te_ds": te_ds,
+        "tr_loader": tr_loader,
+        "va_loader": va_loader,
+        "te_loader": te_loader,
+        "scaler": tr_ds.scaler,
+        "delta_scale": float(delta_scale),
         "sizes": (len(tr_ds), len(va_ds.df) if has_val else 0, len(te_ds.df)),
-        "leakage": leakage_report(df, tr_idx, va_idx, te_idx),
+        "leakage": leakage_report(df, tr_used, va_used, te_used),
         "indices": (tr_idx, va_idx, te_idx),
+        "used_indices": (tr_used, va_used, te_used),
     }
 
 
@@ -263,7 +353,8 @@ def _run_epoch(
     loader: DataLoader,
     criterion: MultiTaskBayesianRankingLoss,
     optimizer: Optional[torch.optim.Optimizer] = None,
-) -> Tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+           np.ndarray]:
     """Execute one epoch (training or validation).
 
     Returns ``(loss, s1, s2, y1, y2, valid, rank_valid)``:
@@ -276,6 +367,7 @@ def _run_epoch(
     """
     training = optimizer is not None
     model.train(training)
+    device = get_default_device()
 
     total_loss = 0.0
     total_samples = 0
@@ -284,15 +376,19 @@ def _run_epoch(
     ctx = torch.enable_grad() if training else torch.no_grad()
     with ctx:
         for mg1, mg2, ef1, ef2, y1, y2, ok1, ok2 in loader:
-            ef1, ef2 = ef1.to(DEVICE), ef2.to(DEVICE)
-            y1, y2 = y1.to(DEVICE), y2.to(DEVICE)
-            ok1, ok2 = ok1.to(DEVICE), ok2.to(DEVICE)
-            valid = ok1 & ok2                       # both measured -> regression
-            rank_valid = (ok1 | ok2) & (y1 != y2)   # ordering decidable -> BPR
+            ef1, ef2 = ef1.to(device), ef2.to(device)
+            y1, y2 = y1.to(device), y2.to(device)
+            ok1, ok2 = ok1.to(device), ok2.to(device)
+            valid = ok1 & ok2  # both measured -> regression
+            rank_valid = (ok1 | ok2) & (y1 != y2)  # ordering decidable -> BPR
 
             s1, s2 = model(mg1, ef1, mg2, ef2)
-            loss, _ = criterion(s1, s2, y1, y2,
-                                valid=valid, rank_valid=rank_valid)
+            loss, _ = criterion(s1,
+                                s2,
+                                y1,
+                                y2,
+                                valid=valid,
+                                rank_valid=rank_valid)
 
             if training:
                 optimizer.zero_grad()
@@ -311,13 +407,17 @@ def _run_epoch(
             all_rank.append(rank_valid.cpu())
 
     def _cat(lst):
-        return torch.cat(lst).numpy() if lst else np.empty((0, len(TASK_NAMES)))
+        return torch.cat(lst).numpy() if lst else np.empty(
+            (0, len(TASK_NAMES)))
 
     if total_samples == 0:
-        logger.warning("Epoch ran on an empty data loader; returning zero loss / empty arrays")
+        logger.warning(
+            "Epoch ran on an empty data loader; returning zero loss / empty arrays"
+        )
         empty = np.empty((0, len(TASK_NAMES)), dtype=np.float32)
         empty_b = np.empty((0, len(TASK_NAMES)), dtype=bool)
-        return 0.0, empty, empty.copy(), empty.copy(), empty.copy(), empty_b, empty_b.copy()
+        return 0.0, empty, empty.copy(), empty.copy(), empty.copy(
+        ), empty_b, empty_b.copy()
 
     return (
         total_loss / total_samples,
@@ -330,7 +430,12 @@ def _run_epoch(
     )
 
 
-def compute_metrics(s1, s2, y1, y2, valid=None, rank_valid=None) -> Dict[str, float]:
+def compute_metrics(s1,
+                    s2,
+                    y1,
+                    y2,
+                    valid=None,
+                    rank_valid=None) -> Dict[str, float]:
     """Compute pairwise accuracy, Spearman rho and correct-direction probability.
 
     ``rank_valid`` [N, T] (optional) marks pairs whose ordering is decidable —
@@ -344,6 +449,18 @@ def compute_metrics(s1, s2, y1, y2, valid=None, rank_valid=None) -> Dict[str, fl
     ``avg_prob`` is the mean probability assigned to the **correct** direction
     (:math:`\\sigma(\\text{sign}(y_1-y_2)(s_1-s_2))`), so it is high only when
     the model is both right and confident.
+
+    Conventions worth knowing before comparing these numbers to other work:
+
+    * **ties**: pairs with ``y1 == y2`` are excluded beforehand by ``rank_valid``.
+      A predicted tie (``s1 == s2``, i.e. ``sign(dp) == 0``) is counted as
+      **wrong**, which keeps ``pair_acc`` a strict "got the direction right"
+      rate rather than crediting 0.5 for a coin flip.
+    * **Spearman** is computed on the *pooled* per-side values
+      (``[s1[v], s2[v]]`` vs ``[y1[v], y2[v]]``) restricted to pairs with two
+      measured mobilities. It therefore measures how well the absolute score
+      tracks the absolute log-mobility, not how well it orders within a pair;
+      that makes it stricter — and noisier — than the pairwise accuracy.
     """
     out: Dict[str, float] = {}
     n_tasks = s1.shape[1]
@@ -353,13 +470,16 @@ def compute_metrics(s1, s2, y1, y2, valid=None, rank_valid=None) -> Dict[str, fl
         dy = y1[:, t] - y2[:, t]
 
         # ordering-decidable pairs (accuracy / probability)
-        mask = (dy != 0) if rank_valid is None else (
-            rank_valid[:, t].astype(bool) & (dy != 0))
+        mask = (dy
+                != 0) if rank_valid is None else (rank_valid[:, t].astype(bool)
+                                                  & (dy != 0))
         # pairs with two measured values (spearman)
-        v = (np.ones_like(dp, dtype=bool) if valid is None
-             else valid[:, t].astype(bool))
+        v = (np.ones_like(dp, dtype=bool)
+             if valid is None else valid[:, t].astype(bool))
 
-        acc = float((np.sign(dp[mask]) == np.sign(dy[mask])).mean()) if mask.any() else 0.0
+        # sign(dp) == 0 (the model predicts a tie) counts as wrong, see docstring
+        acc = float((np.sign(dp[mask]) == np.sign(
+            dy[mask])).mean()) if mask.any() else 0.0
 
         if v.sum() >= 3 and np.ptp(np.concatenate([s1[v, t], s2[v, t]])) > 0:
             scores = np.concatenate([s1[v, t], s2[v, t]])
@@ -378,8 +498,11 @@ def compute_metrics(s1, s2, y1, y2, valid=None, rank_valid=None) -> Dict[str, fl
         out[f"{name}_n_rank"] = float(mask.sum())
         out[f"{name}_n_reg"] = float(v.sum())
 
-    out["mean_pair_acc"] = float(np.mean(
-        [out[f"{TASK_NAMES[t]}_pair_acc"] for t in range(min(n_tasks, len(TASK_NAMES)))]))
+    out["mean_pair_acc"] = float(
+        np.mean([
+            out[f"{TASK_NAMES[t]}_pair_acc"]
+            for t in range(min(n_tasks, len(TASK_NAMES)))
+        ]))
     return out
 
 
@@ -409,22 +532,52 @@ def _build_model(mcfg: ModelConfig) -> PolymerRankingModel:
         extra_dim=mcfg.extra_dim,
         num_tasks=mcfg.num_tasks,
         aggregation=mcfg.aggregation,
-    ).to(DEVICE)
+    ).to(get_default_device())
 
 
 def _make_scheduler(cfg, optimizer):
     if getattr(cfg, "scheduler", "plateau") == "cosine":
-        return CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr * 1e-2)
-    return ReduceLROnPlateau(optimizer, mode="max", factor=0.5,
-                             patience=10, min_lr=1e-6)
+        return CosineAnnealingLR(optimizer,
+                                 T_max=cfg.epochs,
+                                 eta_min=cfg.lr * 1e-2)
+    return ReduceLROnPlateau(optimizer,
+                             mode="max",
+                             factor=0.5,
+                             patience=10,
+                             min_lr=1e-6)
 
 
-def _run_training_loop(model, criterion, optimizer, scheduler, stopper, cfg,
-                       tr_loader, va_loader, log_every: int = 10):
-    """Shared epoch loop for :func:`train` and :func:`run_experiment`."""
-    history: Dict[str, Any] = {"train_loss": [], "val_loss": [], "val_metrics": []}
+def _run_training_loop(model,
+                       criterion,
+                       optimizer,
+                       scheduler,
+                       stopper,
+                       cfg,
+                       tr_loader,
+                       va_loader,
+                       log_every: int = 10):
+    """Shared epoch loop for :func:`train` and :func:`run_experiment`.
+
+    Returns ``history`` plus **both** weight snapshots separately:
+
+    ``final_state``
+        weights at the last executed epoch (or |None| when no epoch ran);
+    ``best_state``
+        the best monitored state, falling back to ``final_state`` when no
+        improvement was ever recorded (no validation set, degenerate run).
+
+    Keeping them apart is what lets ``train`` write a real
+    ``final_model.safetensors``; collapsing them silently turned "final" into a
+    second copy of "best".
+    """
+    history: Dict[str, Any] = {
+        "train_loss": [],
+        "val_loss": [],
+        "val_metrics": []
+    }
     best_metrics: Dict[str, float] = {}
     best_epoch = 0
+    device = get_default_device()
 
     for epoch in range(1, cfg.epochs + 1):
         tr_loss, *_ = _run_epoch(model, tr_loader, criterion, optimizer)
@@ -459,23 +612,43 @@ def _run_training_loop(model, criterion, optimizer, scheduler, stopper, cfg,
                 f"n={int(va_met['mu_e_n_rank'])} | "
                 f"mu_h acc={va_met['mu_h_pair_acc']:.3f} "
                 f"rho={va_met['mu_h_spearman']:.3f} "
-                f"n={int(va_met['mu_h_n_rank'])}"
-            )
+                f"n={int(va_met['mu_h_n_rank'])}")
 
         if stopper.step(monitor, model):
-            logger.info(f"Early stopping at epoch {epoch} "
-                        f"(best {cfg.early_stop_metric}={stopper.best_score:.4f})")
+            logger.info(
+                f"Early stopping at epoch {epoch} "
+                f"(best {cfg.early_stop_metric}={stopper.best_score:.4f})")
             break
         if stopper.counter == 0:
             best_epoch = epoch
             best_metrics = va_met
 
-    if stopper.best_state is not None:
-        model.load_state_dict({k: v.to(DEVICE) for k, v in stopper.best_state.items()})
+    # weights at the end of training — captured *before* the best state is put
+    # back into the model, otherwise the last epoch is lost forever
+    final_state = {
+        k: v.detach().cpu().clone()
+        for k, v in model.state_dict().items()
+    }
+    best_state = {
+        k: v.to(device)
+        for k, v in stopper.best_state.items()
+    } if stopper.best_state is not None else {
+        k: v.clone() for k, v in final_state.items()
+    }
+
+    model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+
     if not best_metrics:
-        best_metrics = history["val_metrics"][-1] if history["val_metrics"] else {}
+        best_metrics = history["val_metrics"][-1] if history[
+            "val_metrics"] else {}
         best_metrics = dict(best_metrics or {})
-    return {"history": history, "best_metrics": best_metrics, "best_epoch": best_epoch}
+    return {
+        "history": history,
+        "best_metrics": best_metrics,
+        "best_epoch": best_epoch,
+        "final_state": final_state,
+        "best_state": best_state,
+    }
 
 
 def run_experiment(
@@ -489,10 +662,18 @@ def run_experiment(
 
     Lightweight variant of :func:`train` used for hyper-parameter search: no
     checkpoint is written and only the best validation metrics are kept.
+
+    Reproducibility: the seed **must** be applied here too. Splitting already
+    uses it, but model initialisation and dropout do not — without this every
+    trial would depend on whatever RNG state the previous trial left behind, so
+    ``hyperparam_search`` could not be re-run and the intended "average over
+    ``--n_repeats`` splits" would additionally average over uncontrolled init
+    noise.
     """
     cfg = copy.deepcopy(train_config)
     if max_epochs:
         cfg.epochs = max_epochs
+    seed_everything(cfg.seed)
 
     splits = prepare_splits(df, cfg)
     model = _build_model(model_config)
@@ -502,13 +683,21 @@ def run_experiment(
         delta_scale=splits["delta_scale"],
         censored_weight=cfg.censored_weight,
     )
-    optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = AdamW(model.parameters(),
+                      lr=cfg.lr,
+                      weight_decay=cfg.weight_decay)
     scheduler = _make_scheduler(cfg, optimizer)
     stopper = EarlyStopping(patience=cfg.patience, mode=_stopper_mode(cfg))
 
-    out = _run_training_loop(model, criterion, optimizer, scheduler, stopper, cfg,
-                             splits["tr_loader"], splits["va_loader"],
-                             log_every=10 if verbose else 10 ** 9)
+    out = _run_training_loop(model,
+                             criterion,
+                             optimizer,
+                             scheduler,
+                             stopper,
+                             cfg,
+                             splits["tr_loader"],
+                             splits["va_loader"],
+                             log_every=10 if verbose else 10**9)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     del model
 
@@ -530,15 +719,14 @@ def train(
     mcfg = model_config
 
     Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
-    torch.manual_seed(cfg.seed)
-    torch.cuda.manual_seed_all(cfg.seed)
-    np.random.seed(cfg.seed)
+    set_default_device(getattr(cfg, "device", "auto"))
+    seed_everything(cfg.seed)
 
     df = load_and_preprocess(cfg.csv_path,
                              depth=mcfg.depth,
                              max_repeats=cfg.max_repeats)
     splits = prepare_splits(df, cfg)
-    tr_ds, tr_loader = splits["tr_ds"], splits["tr_loader"]
+    tr_loader = splits["tr_loader"]
     va_loader, te_loader = splits["va_loader"], splits["te_loader"]
 
     logger.info(f"Split by '{cfg.split_by}': "
@@ -547,8 +735,9 @@ def train(
     logger.info(f"delta_scale (std of measured log10 differences): "
                 f"{splits['delta_scale']:.3f}")
     if splits["leakage"]:
-        logger.info("Leakage diagnostics: " + ", ".join(
-            f"{k}={v}" for k, v in splits["leakage"].items()))
+        logger.info("Leakage diagnostics: " +
+                    ", ".join(f"{k}={v}"
+                              for k, v in splits["leakage"].items()))
 
     model = _build_model(mcfg)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -560,25 +749,31 @@ def train(
         delta_scale=splits["delta_scale"],
         censored_weight=cfg.censored_weight,
     )
-    optimizer = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = AdamW(model.parameters(),
+                      lr=cfg.lr,
+                      weight_decay=cfg.weight_decay)
     scheduler = _make_scheduler(cfg, optimizer)
     stopper = EarlyStopping(patience=cfg.patience, mode=_stopper_mode(cfg))
 
     if va_loader is None:
-        logger.info("Validation set is empty (val_ratio=0); early stopping disabled")
+        logger.info(
+            "Validation set is empty (val_ratio=0); early stopping disabled")
 
-    out = _run_training_loop(model, criterion, optimizer, scheduler, stopper, cfg,
-                             tr_loader, va_loader)
+    out = _run_training_loop(model, criterion, optimizer, scheduler, stopper,
+                             cfg, tr_loader, va_loader)
     history = out["history"]
 
-    te_loss, s1, s2, y1, y2, valid, rank_valid = _run_epoch(
+    # NOTE: the model currently holds `best_state` (restored by the loop), so the
+    # test metrics reported below are the ones of the *selected* model. They are
+    # kept that way deliberately — no further restoration of `final_state`.
+    _, s1, s2, y1, y2, valid, rank_valid = _run_epoch(
         model, te_loader, criterion)
     te_met = compute_metrics(s1, s2, y1, y2, valid, rank_valid)
+    te_met["best_epoch"] = float(out["best_epoch"])
     logger.info("\n========== Test Results ==========")
     for k, v in te_met.items():
         logger.info(f"  {k:25s}: {v:.4f}")
 
-    model_state = model.state_dict()
     extra = {
         "delta_scale": splits["delta_scale"],
         "loss_config": {
@@ -587,29 +782,34 @@ def train(
             "censored_weight": cfg.censored_weight,
         },
         "split_by": cfg.split_by,
+        # full reproduction info: the model architecture alone is not enough to
+        # re-create a run (lr / epochs / seed / ratios were previously lost)
+        "train_config": cfg.to_dict(),
+        "train_epochs_run": len(out["history"]["train_loss"]),
+        "leakage": splits["leakage"],
     }
     # group split keeps papers intact, so give its checkpoints a distinct
     # default name to avoid silently overwriting the random-split model
-    ckpt_name = ("best_model_group.safetensors" if cfg.split_by == "group"
-                 else "best_model.safetensors")
-    ckpt_path = Path(cfg.save_dir) / ckpt_name
+    suffix = "_group" if cfg.split_by == "group" else ""
+
+    ckpt_path = Path(cfg.save_dir) / f"best_model{suffix}.safetensors"
     save_checkpoint(
         ckpt_path,
-        model_state=model_state,
+        model_state=out["best_state"],
         scaler=splits["scaler"],
         config=mcfg.to_dict(),
-        extra=extra,
+        extra={**extra, "snapshot": "best"},
     )
 
-    final_name = ("final_model_group.safetensors" if cfg.split_by == "group"
-                  else "final_model.safetensors")
-    final_path = Path(cfg.save_dir) / final_name
+    final_path = Path(cfg.save_dir) / f"final_model{suffix}.safetensors"
     save_checkpoint(
         final_path,
-        model_state=model_state,
+        model_state=out["final_state"],
         scaler=splits["scaler"],
         config=mcfg.to_dict(),
-        extra={**extra, "history": history},
+        extra={
+            **extra, "snapshot": "final", "history": history
+        },
     )
 
     return {
@@ -629,11 +829,11 @@ def finetune(config: FinetuneConfig) -> Dict[str, Any]:
     from .predict import load_checkpoint
 
     Path(config.save_dir).mkdir(parents=True, exist_ok=True)
-    torch.manual_seed(config.seed)
-    torch.cuda.manual_seed_all(config.seed)
-    np.random.seed(config.seed)
+    set_default_device(getattr(config, "device", "auto"))
+    seed_everything(config.seed)
 
-    model_config, scaler, model, ckpt_meta = load_checkpoint(config.checkpoint_path)
+    model_config, scaler, model, ckpt_meta = load_checkpoint(
+        config.checkpoint_path)
     # keep the regression target on the same scale as during pre-training
     delta_scale = (ckpt_meta or {}).get("delta_scale")
     loss_cfg = (ckpt_meta or {}).get("loss_config") or {}
@@ -643,22 +843,33 @@ def finetune(config: FinetuneConfig) -> Dict[str, Any]:
                              max_repeats=config.max_repeats)
     logger.info(f"Full dataset size: {len(df)} pairs")
 
+    if getattr(config, "drop_duplicate_pairs", False):
+        df = _drop_duplicate_pairs(df)
+
     idx = np.arange(len(df))
     if config.val_ratio > 0:
-        tr_idx, va_idx = train_test_split(idx, test_size=config.val_ratio,
+        tr_idx, va_idx = train_test_split(idx,
+                                          test_size=config.val_ratio,
                                           random_state=config.seed)
     else:
         tr_idx, va_idx = idx, np.array([], dtype=int)
 
     full_ds = PairDataset(df.iloc[tr_idx], scaler=scaler, fit_scaler=False)
-    full_loader = DataLoader(full_ds, batch_size=config.batch_size, shuffle=True,
-                             collate_fn=collate_fn, num_workers=0)
+    full_loader = DataLoader(full_ds,
+                             batch_size=config.batch_size,
+                             shuffle=True,
+                             collate_fn=collate_fn,
+                             num_workers=0)
 
     va_loader = None
     if len(va_idx):
-        va_ds = CachedPairDataset(df.iloc[va_idx], config.batch_size,
-                                  scaler=scaler, fit_scaler=False)
-        va_loader = DataLoader(va_ds, batch_size=1, shuffle=False,
+        va_ds = CachedPairDataset(df.iloc[va_idx],
+                                  config.batch_size,
+                                  scaler=scaler,
+                                  fit_scaler=False)
+        va_loader = DataLoader(va_ds,
+                               batch_size=1,
+                               shuffle=False,
                                collate_fn=collate_cached_batch)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -675,16 +886,23 @@ def finetune(config: FinetuneConfig) -> Dict[str, Any]:
         delta_scale=delta_scale,
         censored_weight=loss_cfg.get("censored_weight", 1.0),
     )
-    optimizer = AdamW(model.parameters(), lr=config.lr,
+    optimizer = AdamW(model.parameters(),
+                      lr=config.lr,
                       weight_decay=config.weight_decay)
-    scheduler = CosineAnnealingLR(optimizer, T_max=config.finetune_epochs,
+    scheduler = CosineAnnealingLR(optimizer,
+                                  T_max=config.finetune_epochs,
                                   eta_min=config.lr * 0.1)
     stopper = EarlyStopping(patience=config.patience, mode="max")
 
-    history: Dict[str, Any] = {"train_loss": [], "train_metrics": [], "val_metrics": []}
+    history: Dict[str, Any] = {
+        "train_loss": [],
+        "train_metrics": [],
+        "val_metrics": []
+    }
 
     logger.info(
-        f"Starting fine-tuning for {config.finetune_epochs} epochs with lr={config.lr}")
+        f"Starting fine-tuning for {config.finetune_epochs} epochs with lr={config.lr}"
+    )
     for epoch in range(1, config.finetune_epochs + 1):
         tr_loss, s1, s2, y1, y2, valid, rank_valid = _run_epoch(
             model, full_loader, criterion, optimizer)
@@ -716,24 +934,46 @@ def finetune(config: FinetuneConfig) -> Dict[str, Any]:
 
         logger.info(msg)
 
-    if stopper.best_state:
-        model.load_state_dict({k: v.to(DEVICE) for k, v in stopper.best_state.items()})
+    # capture both snapshots *before* deciding which one the model carries:
+    # "final" = last executed epoch, "best" = best validation
+    device = get_default_device()
+    final_state = {
+        k: v.detach().cpu().clone()
+        for k, v in model.state_dict().items()
+    }
+    best_state = ({
+        k: v.detach().cpu().clone()
+        for k, v in stopper.best_state.items()
+    } if stopper.best_state else final_state)
+    model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+
+    common_extra = {
+        "delta_scale": delta_scale,
+        "loss_config": loss_cfg,
+        "finetune_config": config.to_dict(),
+    }
 
     final_ckpt_path = Path(config.save_dir) / "final_model.safetensors"
     save_checkpoint(
         final_ckpt_path,
-        model_state=model.state_dict(),
+        model_state=final_state,
         scaler=scaler,
         config=model_config.to_dict(),
-        extra={
-            "delta_scale": delta_scale,
-            "loss_config": loss_cfg,
-            "finetune_history": history,
-        },
+        extra={**common_extra, "snapshot": "final", "finetune_history": history},
+    )
+
+    best_ckpt_path = Path(config.save_dir) / "finetuned_best_model.safetensors"
+    save_checkpoint(
+        best_ckpt_path,
+        model_state=best_state,
+        scaler=scaler,
+        config=model_config.to_dict(),
+        extra={**common_extra, "snapshot": "best", "finetune_history": history},
     )
 
     return {
         "final_checkpoint": final_ckpt_path,
+        "best_checkpoint": best_ckpt_path,
         "history": history,
         "model": model,
     }

@@ -41,7 +41,8 @@ def cyclize_polymer_with_cp_marking(
         depth: int = DEFAULT_DEPTH,
         min_span: Optional[int] = None,
         max_repeats: int = OLIGOMER_MAX_REPEATS,
-        auto_oligomer: bool = True) -> Tuple[Optional[str], Optional[Chem.Mol]]:
+        auto_oligomer: bool = True
+) -> Tuple[Optional[str], Optional[Chem.Mol]]:
     """
     Cyclize a polymer repeat unit (with *) and mark connection points (CP).
 
@@ -72,7 +73,17 @@ def cyclize_polymer_with_cp_marking(
         - mol: Cyclized RDKit Mol object with connection point atoms marked with
           is_cp property and the number of repeat units stored in n_repeat.
     """
-    mol = Chem.MolFromSmiles(smiles)
+    # A NaN / non-string cell (e.g. an empty CSV field) must behave like an
+    # invalid SMILES instead of raising inside RDKit and aborting the whole run.
+    if not isinstance(smiles, str):
+        logger.warning(f"Skipping non-string SMILES input: {smiles!r}")
+        return None, None
+
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+    except Exception as e:  # pragma: no cover - defensive, RDKit raises TypeError
+        logger.error(f"Error parsing smiles {smiles!r}: {e}")
+        return None, None
     if mol is None:
         return None, None
 
@@ -178,8 +189,7 @@ def get_attachment_atoms(smiles_or_mol: MolLike) -> Optional[Tuple[int, int]]:
     attachment_indices = []
     for idx in dummy_indices:
         neighbors = [
-            nb.GetIdx()
-            for nb in mol.GetAtomWithIdx(idx).GetNeighbors()
+            nb.GetIdx() for nb in mol.GetAtomWithIdx(idx).GetNeighbors()
             if nb.GetSymbol() != "*"
         ]
         if not neighbors:
@@ -232,10 +242,8 @@ def attachment_topological_distance(smiles_or_mol: MolLike) -> Optional[int]:
 
 
 def _shortest_bond_distance(
-        mol: Chem.Mol,
-        start: int,
-        end: int,
-        blocked: FrozenSet[int] = frozenset()) -> Optional[int]:
+    mol: Chem.Mol, start: int, end: int,
+    blocked: FrozenSet[int] = frozenset()) -> Optional[int]:
     """
     Number of bonds on the shortest path between two atoms (BFS).
 
@@ -291,12 +299,8 @@ def cp_topological_distance(mol: Optional[Chem.Mol]) -> Optional[int]:
     return _shortest_bond_distance(mol, pair[0], pair[1])
 
 
-def _link_bond_info(
-        mol: Chem.Mol,
-        dummy_a: int,
-        attach_a: int,
-        dummy_b: int,
-        attach_b: int) -> Tuple[Chem.BondType, Chem.BondDir]:
+def _link_bond_info(mol: Chem.Mol, dummy_a: int, attach_a: int, dummy_b: int,
+                    attach_b: int) -> Tuple[Chem.BondType, Chem.BondDir]:
     """
     Bond type / direction used for the bond that replaces a ``*`` attachment.
 
@@ -391,8 +395,8 @@ def build_linear_oligomer(smiles_or_mol: MolLike,
                         if new_bond is not None and bond_dir != Chem.BondDir.NONE:
                             new_bond.SetBondDir(bond_dir)
 
-        removed = sorted(
-            [d + i * n_atoms for i in range(n) for d in dummies], reverse=True)
+        removed = sorted([d + i * n_atoms for i in range(n) for d in dummies],
+                         reverse=True)
         for idx in removed:
             rw_mol.RemoveAtom(idx)
 
@@ -487,12 +491,11 @@ def choose_oligomer_repeats(
     return best_n
 
 
-def cyclize_df(
-        df: pd.DataFrame,
-        depth: int = DEFAULT_DEPTH,
-        min_span: Optional[int] = None,
-        max_repeats: int = OLIGOMER_MAX_REPEATS,
-        auto_oligomer: bool = True) -> pd.DataFrame:
+def cyclize_df(df: pd.DataFrame,
+               depth: int = DEFAULT_DEPTH,
+               min_span: Optional[int] = None,
+               max_repeats: int = OLIGOMER_MAX_REPEATS,
+               auto_oligomer: bool = True) -> pd.DataFrame:
     """Perform cyclization on DataFrame, add cyc_1/2, mol_1/2 columns."""
     df = df.copy()
     n_expanded = 0
@@ -507,15 +510,21 @@ def cyclize_df(
         df[f"cyc_{s}"] = results.apply(lambda x: x[0])
         df[f"mol_{s}"] = results.apply(lambda x: x[1])
         n_expanded += int(
-            sum(1 for m in df[f"mol_{s}"]
-                if m is not None and m.HasProp("n_repeat")
-                and m.GetIntProp("n_repeat") > 1))
+            sum(1 for m in df[f"mol_{s}"] if m is not None
+                and m.HasProp("n_repeat") and m.GetIntProp("n_repeat") > 1))
 
     if auto_oligomer:
         logger.info(
             f"Cyclization: {n_expanded} short units expanded into oligomers "
             f"(span target {min_span if min_span is not None else min_span_for_depth(depth)}, "
             f"max_repeats={max_repeats})")
+
+    n_failed = sum(int(df[f"cyc_{s}"].isna().sum()) for s in ("1", "2"))
+    if n_failed:
+        logger.warning(
+            f"Cyclization failed for {n_failed} polymer entries "
+            f"(SMILES without exactly two '*', unparsable or non-string cells); "
+            f"the affected rows are dropped downstream")
     return df
 
 
@@ -525,12 +534,61 @@ def extra_feat(df: pd.DataFrame, suffix: str) -> np.ndarray:
     return df[cols].fillna(0.0).values.astype(np.float32)
 
 
-def load_and_preprocess(
-        csv_path: str,
-        depth: int = DEFAULT_DEPTH,
-        min_span: Optional[int] = None,
-        max_repeats: int = OLIGOMER_MAX_REPEATS,
-        auto_oligomer: bool = True) -> pd.DataFrame:
+def censor_floor(df: pd.DataFrame, task: str) -> float:
+    """Sentinel log-value for a censored (``mu = 0``) entry of ``task``.
+
+    A mobility of ``0`` means the measurement came back below the detection
+    limit (*测不出来*), so the only thing we know is that it lies below every
+    measured value. The sentinel is therefore placed ``CENSOR_LOG_MARGIN``
+    decades below the smallest *measured* mobility of that task; it exists purely
+    so that ``sign(y1 - y2)`` points the right way and is never used as a
+    regression target (the ``ok_*`` masks drop those pairs).
+    """
+    if f"{task}_1" not in df.columns:
+        raise KeyError(f"missing mobility column {task}_1")
+    raw = pd.concat([df[f"{task}_1"], df[f"{task}_2"]])
+    measured = raw[raw > 0]
+    if len(measured):
+        return float(np.log10(measured.min())) - CENSOR_LOG_MARGIN
+    return -6.0 - CENSOR_LOG_MARGIN
+
+
+def _fill_log_targets(df: pd.DataFrame, task: str, floor: float) -> None:
+    """Write ``ok_{task}_{side}`` / ``log_{task}_{side}`` columns in place."""
+    for s in ("1", "2"):
+        col = f"{task}_{s}"
+        ok = (df[col] > 0).values
+        vals = np.array(np.log10(df[col].clip(lower=1e-30)), dtype=np.float64)
+        vals[~ok] = floor
+        df[f"ok_{col}"] = ok
+        df[f"log_{col}"] = vals.astype(np.float64)
+
+
+def apply_censor_floor(df: pd.DataFrame, inplace: bool = False) -> pd.DataFrame:
+    """Recompute ``log_*`` using a floor estimated from **this frame only**.
+
+    ``load_and_preprocess`` derives the sentinel from the whole file, which
+    happens *before* train/val/test are carved out — i.e. it peeks at held-out
+    labels. Callers that care about that (see :func:`prepare_splits`) pass each
+    split through this function so every split uses its own floor.
+
+    The sentinel carries no numeric information (it never enters the regression
+    term), so using a per-split floor changes no gradient — it only removes the
+    cross-split dependency.
+    """
+    out = df if inplace else df.copy()
+    for t in TASK_NAMES:
+        if f"{t}_1" not in out.columns:
+            continue
+        _fill_log_targets(out, t, censor_floor(out, t))
+    return out
+
+
+def load_and_preprocess(csv_path: str,
+                        depth: int = DEFAULT_DEPTH,
+                        min_span: Optional[int] = None,
+                        max_repeats: int = OLIGOMER_MAX_REPEATS,
+                        auto_oligomer: bool = True) -> pd.DataFrame:
     """
     Read CSV and perform:
       - Polymer cyclization (with oligomer expansion for too short units)
@@ -556,33 +614,20 @@ def load_and_preprocess(
     otherwise they contribute nothing to either term.
     """
     df = pd.read_csv(csv_path)
-    df = cyclize_df(
-        df,
-        depth=depth,
-        min_span=min_span,
-        max_repeats=max_repeats,
-        auto_oligomer=auto_oligomer)
+    df = cyclize_df(df,
+                    depth=depth,
+                    min_span=min_span,
+                    max_repeats=max_repeats,
+                    auto_oligomer=auto_oligomer)
 
     target_raw = [f"{t}_{s}" for t in TASK_NAMES for s in ("1", "2")]
     df = df.dropna(subset=["cyc_1", "cyc_2"] +
                    target_raw).reset_index(drop=True)
     df = df[df["mol_1"].notna() & df["mol_2"].notna()].reset_index(drop=True)
+    df = apply_censor_floor(df, inplace=True)
 
     for t in TASK_NAMES:
-        raw = pd.concat([df[f"{t}_1"], df[f"{t}_2"]])
-        measured = raw[raw > 0]
-        if len(measured):
-            floor = float(np.log10(measured.min())) - CENSOR_LOG_MARGIN
-        else:  # pragma: no cover - degenerate dataset without a single label
-            floor = -6.0 - CENSOR_LOG_MARGIN
-        for s in ("1", "2"):
-            col = f"{t}_{s}"
-            ok = (df[col] > 0).values
-            vals = np.array(np.log10(df[col].clip(lower=1e-30)), dtype=np.float64)
-            vals[~ok] = floor
-            df[f"ok_{col}"] = ok
-            df[f"log_{col}"] = vals.astype(np.float64)
-
+        floor = censor_floor(df, t)
         ok1, ok2 = df[f"ok_{t}_1"], df[f"ok_{t}_2"]
         n_both = int((ok1 & ok2).sum())
         n_one = int((ok1 ^ ok2).sum())
@@ -591,8 +636,7 @@ def load_and_preprocess(
             f"{t}: {n_both}/{len(df)} pairs have both mobilities measured "
             f"(regression target known); {n_one} have exactly one censored side "
             f"(ranking only); {n_none} are censored on both sides (no ordering "
-            f"information). censored log floor = {floor:.2f}"
-        )
+            f"information). censored log floor = {floor:.2f}")
 
     logger.info(f"Preprocessed dataset: {len(df)} valid pairs")
     return df

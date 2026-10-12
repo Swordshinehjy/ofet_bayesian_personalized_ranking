@@ -65,7 +65,8 @@ def save_checkpoint(
     if config is not None:
         meta["config"] = json.dumps(config, default=_json_default)
     for key, value in (extra or {}).items():
-        meta[f"{_EXTRA_PREFIX}{key}"] = json.dumps(value, default=_json_default)
+        meta[f"{_EXTRA_PREFIX}{key}"] = json.dumps(value,
+                                                   default=_json_default)
     if scaler is not None:
         for attr in _SCALER_ARRAYS:
             meta[f"{_SCALER_PREFIX}{attr}"] = json.dumps(
@@ -116,13 +117,14 @@ def load_checkpoint_dict(
     if f"{_SCALER_PREFIX}mean_" in meta:
         scaler = StandardScaler()
         for attr in _SCALER_ARRAYS:
-            setattr(scaler, attr,
-                    np.asarray(json.loads(meta[f"{_SCALER_PREFIX}{attr}"]),
-                               dtype=np.float64))
+            setattr(
+                scaler, attr,
+                np.asarray(json.loads(meta[f"{_SCALER_PREFIX}{attr}"]),
+                           dtype=np.float64))
         scaler.n_features_in_ = int(
             json.loads(meta[f"{_SCALER_PREFIX}n_features_in_"]))
         n_seen = json.loads(meta[f"{_SCALER_PREFIX}n_samples_seen_"])
-        scaler.n_samples_seen_ = (np.asarray(n_seen) if isinstance(n_seen, list)
-                                  else n_seen)
+        scaler.n_samples_seen_ = (np.asarray(n_seen) if isinstance(
+            n_seen, list) else n_seen)
         ckpt["scaler"] = scaler
     return ckpt

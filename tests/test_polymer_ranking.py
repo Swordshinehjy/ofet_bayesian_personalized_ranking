@@ -7,6 +7,7 @@ import sys
 import os
 import tempfile
 import logging
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -344,22 +345,48 @@ class TestModelArchitecture:
 # ── __init__.py import test ─────────────────────────────────────────
 
 class TestInit:
-    def test_no_global_warning_filter(self):
-        """__init__.py should not set warnings.filterwarnings('ignore')."""
+    def test_package_import_adds_no_blanket_warning_filter(self):
+        """Importing the package must not silence warnings process-wide.
+
+        This test used to have no assertion at all. It now diffs the filter list
+        around a fresh import, so third-party filters cannot mask a regression.
+        """
+        import importlib
         import warnings
-        # Import should not have added a global "ignore" filter
-        has_ignore = any(
-            f[2] == "ignore"
-            for f in warnings.filters
-        )
-        # This test just checks that our import doesn't add a blanket ignore
-        # (Other packages may have added filters, so we can't assert not has_ignore)
+
+        before = list(warnings.filters)
+        for name in [m for m in list(sys.modules)
+                     if m == "polymer_ranking" or m.startswith("polymer_ranking.")]:
+            del sys.modules[name]
+        try:
+            importlib.import_module("polymer_ranking")
+        finally:
+            added = [f for f in warnings.filters if f not in before]
+        assert not any(f[2] == DeprecationWarning or f[2] is Warning
+                       for f in added), (
+            "importing polymer_ranking installs a catch-all warning filter; "
+            "that would hide RDKit / torch problems from users")
+
+    def test_no_warnings_emitted_on_import(self):
+        import importlib
+        import warnings
+
+        for name in [m for m in list(sys.modules)
+                     if m == "polymer_ranking" or m.startswith("polymer_ranking.")]:
+            del sys.modules[name]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            importlib.import_module("polymer_ranking")
+        assert [str(w.message) for w in caught] == []
 
     def test_explicit_imports(self):
         """Key names should be importable from polymer_ranking."""
         from polymer_ranking import ModelConfig, TrainingConfig
         from polymer_ranking import MultiTaskBayesianRankingLoss
         from polymer_ranking import cyclize_polymer_with_cp_marking
+        from polymer_ranking import save_checkpoint, load_checkpoint_dict
+        from polymer_ranking import seed_everything, get_default_device
+        from polymer_ranking import apply_censor_floor, censor_floor
 
 
 # ── dataset.py inheritance test ─────────────────────────────────────
@@ -382,12 +409,35 @@ class TestDatasetInheritance:
 # ── cli.py logging test ─────────────────────────────────────────────
 
 class TestCliLogging:
-    def test_main_configures_logging(self):
-        """main() should call logging.basicConfig."""
-        import inspect
+    def test_main_installs_a_file_and_stream_handler(self):
+        """Behaviour, not source text: after main() runs, logs land in a file.
+
+        The old version asserted that the source of ``main`` contains the
+        string ``"logging.basicConfig"`` — a rename would break it while the
+        feature kept working, and it could not fail when logging *stopped*
+        working either.
+        """
+        import logging
+        import tempfile
         from polymer_ranking.cli import main
-        source = inspect.getsource(main)
-        assert "logging.basicConfig" in source
+
+        handlers = list(logging.root.handlers)
+        logging.root.handlers.clear()
+        cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                sys.argv = ["polymer_ranking", "--mode", "train", "--help"]
+                try:
+                    main()
+                except SystemExit:
+                    pass
+                logs_exist = Path("result.log").exists()
+            finally:
+                os.chdir(cwd)
+                logging.root.handlers[:] = handlers
+        assert logs_exist, "main() should create result.log in the working dir"
+
 
 
 if __name__ == "__main__":
